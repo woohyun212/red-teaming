@@ -200,7 +200,7 @@ python eval.py \
 
 
 ## Transfer experiments
-First train an attacker model with GFlowNet and MLE for Gemma and you can transfer to attack new target models from \{\texttt{llama}, \texttt{mistral}, \texttt{gemma}, \texttt{starling} \}
+First train an attacker model with GFlowNet and MLE for Gemma and you can transfer to attack new target models from $\\{\texttt{llama}, \texttt{mistral}, \texttt{gemma}, \texttt{starling} \\}$
 
 ```bash
 python run_transfer.py \
