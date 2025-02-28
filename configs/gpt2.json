@@ -1,0 +1,8 @@
+{
+    "victim_top_p":0.92,
+    "victim_max_len": 30,
+    "victim_temp": 0.7,
+    "dtype": "float32",
+    "use_4bit": false,
+    "gpu_memory_utilization": 0.75
+}
