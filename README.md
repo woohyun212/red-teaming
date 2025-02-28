@@ -167,7 +167,7 @@ python eval.py \
 
 
 ## MLE-smoothing
-For gpt2, dolly target model, we set to `train_steps` for 2000 and `batch_size` for 2048. For the other models, we use 1000 and 1024 for train_steps and batch_size, respectively. Note that $\texttt{target\\_model} \in \\{\texttt{gpt2}, \texttt{dolly}, \texttt{gemma}, \texttt{llama} \\}$
+For gpt2, dolly target model, we set to `train_steps` for 2000 and `batch_size` for 2048. For the other models, we use 1000 and 1024 for train_steps and batch_size, respectively. Note that $\text{target\\_model} \in \\{\text{gpt2}, \text{dolly}, \text{gemma}, \text{llama} \\}$
 
 
 Collect offline samples based on reward:
@@ -200,7 +200,7 @@ python eval.py \
 
 
 ## Transfer experiments
-First train an attacker model with GFlowNet and MLE for Gemma and you can transfer to attack new target models from $\\{\texttt{llama}, \texttt{mistral}, \texttt{gemma}, \texttt{starling} \\}$
+First train an attacker model with GFlowNet and MLE for Gemma and you can transfer to attack new target models from $\\{\text{llama, mistral, gemma, starling} \\}$
 
 ```bash
 python run_transfer.py \
