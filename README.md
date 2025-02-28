@@ -33,7 +33,10 @@ pip install -r requirements.txt
 You can download the checkpoint from [link](https://drive.google.com/drive/folders/1yG9RPnnL83nrVJ7tiuPYHEHNiN_cDIAo?usp=sharing).
 and save it under the directory ```./save```
 
-
+<details>
+<summary>
+Command-line script
+</summary>
 ```bash
 python main.py \
 --mode sft \
@@ -45,11 +48,16 @@ python main.py \
 --few_shot_file ./prompts/sft_dataset.json \
 --exp_name gpt2-sft-position-final
 ```
+</details>
 
 
 ## GFN fine-tuning with **GPT2** target model
-You can try three different victim models: ```["vicgalle/gpt2-alpaca", "meta-llama/Llama-2-7b-chat-hf", "databricks/dolly-v2-7b"]```
+You can try three different victim models: ```["vicgalle/gpt2-alpaca", "meta-llama/Llama-2-7b-chat-hf", "databricks/dolly-v2-7b"]```.
 
+<details>
+<summary>
+Command-line script
+</summary>
 ```bash
 python main.py \
 --exp_name gpt2-gfn \
@@ -74,9 +82,14 @@ python eval.py \
 --output_file gpt2-gfn \
 --victim_model gpt2
 ```
+</details>
 
 ## GFN fine-tuning with **Dolly** target model
 
+<details>
+<summary>
+Command-line script
+</summary>
 ```bash
 python main.py \
 --exp_name dolly-gfn \
@@ -102,9 +115,14 @@ python eval.py \
 --output_file dolly-gfn \
 --victim_model dolly
 ```
+</details>
 
 ## GFN fine-tuning with **Gemma-2b-it** target model
 
+<details>
+<summary>
+Command-line script
+</summary>
 ```bash
 python main.py \
 --exp_name gemma-gfn \
@@ -132,10 +150,14 @@ python eval.py \
 --output_file gemma-gfn \
 --victim_model gemma
 ```
+</details>
 
 
 ## GFN fine-tuning with **Llama-2-7b** target model
-
+<details>
+<summary>
+Command-line script
+</summary>
 ```bash
 python main.py \
 --exp_name llama-gfn \
@@ -164,7 +186,7 @@ python eval.py \
 --output_file llama-gfn \
 --victim_model llama
 ```
-
+</details>
 
 ## MLE-smoothing
 For gpt2, dolly target model, we set to `train_steps` for 2000 and `batch_size` for 2048. For the other models, we use 1000 and 1024 for train_steps and batch_size, respectively. Note that $\text{target\\_model} \in \\{\text{gpt2}, \text{dolly}, \text{gemma}, \text{llama} \\}$.
@@ -176,6 +198,10 @@ python collect_samples.py --exp_name "{target_model}"_gfn
 ```
 
 Run MLE smoothing:
+<details>
+<summary>
+Command-line script
+</summary>
 ```bash
 python main.py \
 --mode distillation \
@@ -197,21 +223,31 @@ python eval.py \
 --victim_model "{target_model}" \
 --no_lora
 ```
-
+</details>
 
 ## Transfer experiments
 First train an attacker model with GFlowNet and MLE for Gemma and you can transfer to attack new target models from $\\{\text{llama, mistral, gemma, starling} \\}$
 
+<details>
+<summary>
+Command-line script
+</summary>
 ```bash
 python run_transfer.py \
 --victim_model gemma \
 --exp_name gemma_mle \
 --target_model llama
 ```
-
+</details>
 
 ## Safety Fine-tuning
 For safety fine-tuning, train gflownet + MLE to red-team Gemma-2b-it and generate attack prompts.
+
+
+<details>
+<summary>
+Command-line script
+</summary>
 ```bash
 python safety_datset/create_safety_response.py \
 --input_file results/gemma/gemma_mle.json
@@ -232,3 +268,4 @@ python main.py \
 --prompt_file safety_dataset/gemma_mle.json \
 --exp_name gfn-safety-tuned
 ```
+</details>
