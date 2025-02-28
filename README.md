@@ -167,7 +167,7 @@ python eval.py \
 
 
 ## MLE-smoothing
-For gpt2, dolly target model, we set to "{train_steps}" for 2000 and "{batch_size} for 2048. For the other models, we use 1000 and 1024 for train_steps and batch_size, respectively. Note that $\texttt{target\_model} \in \{\texttt{gpt2}, \texttt{dolly}, \texttt{gemma}, \texttt{llama} \}$
+For gpt2, dolly target model, we set to "{train_steps}" for 2000 and "{batch_size} for 2048. For the other models, we use 1000 and 1024 for train_steps and batch_size, respectively. Note that $\texttt{target}\_\texttt{model} \in \{\texttt{gpt2}, \texttt{dolly}, \texttt{gemma}, \texttt{llama} \}$
 
 
 Collect offline samples based on reward:
