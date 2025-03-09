@@ -1,6 +1,8 @@
 # Learning Diverse Attacks on Large Language Models for Robust Red-teaming and Safety Tuning
 
 This repository contains code for Red-teaming with GFlowNet, as described in the paper
+**Note**: We are actively working on testing and cleaning up the code for release. If you encounter issues before that please let us know!
+
 
 **Learning Diverse Attacks on Large Language Models for Robust Red-teaming and Safety Tuning**<br />
 Seanie Lee, Minsu Kim, Lynn Cherif, David Dobre, Juho Lee, Sung Ju Hwang, Kenji Kawaguchi, Gauthier Gidel, Yoshua Bengio, Nikolay Malkin, Moksh Jain <br/>
