@@ -706,7 +706,7 @@ class GFNTrainer(object):
             batch_metrics = defaultdict(list)
 
             self.model.train()
-            self.self.optimizer.zero_grad()
+            self.optimizer.zero_grad()
             for _ in range(self.args.grad_acc_steps):
                 loss, metrics = self.get_batch_metrics(
                     batch, global_step, self.rbuffer,
