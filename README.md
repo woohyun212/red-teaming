@@ -285,5 +285,6 @@ python main.py \
 
 
 `pip install typed-argument-parser` 추가 설치 필요.
+
 본인 버전에 맞는 flash-attn 패키지 별도 설치 필요
 
