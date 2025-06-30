@@ -40,6 +40,7 @@ and save it under the directory ```./save```
 <summary>
 Command-line script
 </summary>
+  
 ```bash
 python main.py \
 --mode sft \
@@ -61,6 +62,7 @@ You can try three different victim models: ```["vicgalle/gpt2-alpaca", "meta-lla
 <summary>
 Command-line script
 </summary>
+  
 ```bash
 python main.py \
 --exp_name gpt2-gfn \
@@ -93,6 +95,7 @@ python eval.py \
 <summary>
 Command-line script
 </summary>
+  
 ```bash
 python main.py \
 --exp_name dolly-gfn \
@@ -126,6 +129,7 @@ python eval.py \
 <summary>
 Command-line script
 </summary>
+  
 ```bash
 python main.py \
 --exp_name gemma-gfn \
@@ -161,6 +165,7 @@ python eval.py \
 <summary>
 Command-line script
 </summary>
+  
 ```bash
 python main.py \
 --exp_name llama-gfn \
@@ -205,6 +210,7 @@ Run MLE smoothing:
 <summary>
 Command-line script
 </summary>
+  
 ```bash
 python main.py \
 --mode distillation \
@@ -235,6 +241,7 @@ First train an attacker model with GFlowNet and MLE for Gemma and you can transf
 <summary>
 Command-line script
 </summary>
+  
 ```bash
 python run_transfer.py \
 --victim_model gemma \
@@ -251,6 +258,7 @@ For safety fine-tuning, train gflownet + MLE to red-team Gemma-2b-it and generat
 <summary>
 Command-line script
 </summary>
+  
 ```bash
 python safety_datset/create_safety_response.py \
 --input_file results/gemma/gemma_mle.json
