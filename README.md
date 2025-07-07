@@ -288,3 +288,17 @@ python main.py \
 
 본인 버전에 맞는 flash-attn 패키지 별도 설치 필요
 
+MLE Soomthing 시
+
+```
+python main.py \
+--mode mle   \
+--exp_name {target_model}_mle  \
+--lr 1e-4  \
+--seed 42   \
+--batch_size 1024   \
+--train_steps 1000   \
+--grad_acc_steps 8   \
+--model_name {trained_model}   \
+--few_shot_file offline_dataset/{target_model}/dataset.json
+```
