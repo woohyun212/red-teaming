@@ -40,6 +40,7 @@ and save it under the directory ```./save```
 <summary>
 Command-line script
 </summary>
+  
 ```bash
 python main.py \
 --mode sft \
@@ -61,6 +62,7 @@ You can try three different victim models: ```["vicgalle/gpt2-alpaca", "meta-lla
 <summary>
 Command-line script
 </summary>
+  
 ```bash
 python main.py \
 --exp_name gpt2-gfn \
@@ -93,6 +95,7 @@ python eval.py \
 <summary>
 Command-line script
 </summary>
+  
 ```bash
 python main.py \
 --exp_name dolly-gfn \
@@ -126,6 +129,7 @@ python eval.py \
 <summary>
 Command-line script
 </summary>
+  
 ```bash
 python main.py \
 --exp_name gemma-gfn \
@@ -161,6 +165,7 @@ python eval.py \
 <summary>
 Command-line script
 </summary>
+  
 ```bash
 python main.py \
 --exp_name llama-gfn \
@@ -205,6 +210,7 @@ Run MLE smoothing:
 <summary>
 Command-line script
 </summary>
+  
 ```bash
 python main.py \
 --mode distillation \
@@ -235,6 +241,7 @@ First train an attacker model with GFlowNet and MLE for Gemma and you can transf
 <summary>
 Command-line script
 </summary>
+  
 ```bash
 python run_transfer.py \
 --victim_model gemma \
@@ -251,6 +258,7 @@ For safety fine-tuning, train gflownet + MLE to red-team Gemma-2b-it and generat
 <summary>
 Command-line script
 </summary>
+  
 ```bash
 python safety_datset/create_safety_response.py \
 --input_file results/gemma/gemma_mle.json
@@ -272,3 +280,25 @@ python main.py \
 --exp_name gfn-safety-tuned
 ```
 </details>
+
+---
+
+
+`pip install typed-argument-parser` 추가 설치 필요.
+
+본인 버전에 맞는 flash-attn 패키지 별도 설치 필요
+
+MLE Soomthing 시
+
+```
+python main.py \
+--mode mle   \
+--exp_name {target_model}_mle  \
+--lr 1e-4  \
+--seed 42   \
+--batch_size 1024   \
+--train_steps 1000   \
+--grad_acc_steps 8   \
+--model_name {trained_model}   \
+--few_shot_file offline_dataset/{target_model}/dataset.json
+```
