@@ -167,6 +167,8 @@ Command-line script
 </summary>
   
 ```bash
+export SFT_CKPT=save/gpt2-sft-position-final/latest
+
 python main.py \
 --exp_name llama-gfn \
 --sim_tolerance 0.3 \
