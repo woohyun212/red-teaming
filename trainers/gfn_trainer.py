@@ -206,6 +206,9 @@ class GFNTrainer(object):
                 self.victim_model_tokenizer.vocab_size
             )
 
+            # Add victim_bs logic before pipeline
+            victim_bs = getattr(self.args, "victim_batch_size", self.args.batch_size)
+
             # 5) pipeline으로 감싸기
             self.victim_model = pipeline(
                 model=model,
@@ -213,7 +216,7 @@ class GFNTrainer(object):
                 task="text-generation",
                 device_map="auto",
                 return_full_text=False,
-                batch_size=args.victim_batch_size,
+                batch_size=victim_bs,
                 max_new_tokens=args.victim_max_len,
                 temperature=args.victim_temp,
                 top_p=args.victim_top_p,
