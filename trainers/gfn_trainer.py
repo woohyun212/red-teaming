@@ -207,7 +207,10 @@ class GFNTrainer(object):
             )
             # Merge LoRA weights into the base model so pipeline recognizes it
             model = model.merge_and_unload()
-
+            # Merge 이후에도 토크나이저 vocab_size에 맞춰 임베딩과 lm_head 크기 확장
+            model.resize_token_embeddings(self.victim_model_tokenizer.vocab_size)
+            # (옵션) embedding과 lm_head 연결 보장
+            model.tie_weights()
             # Add victim_bs logic before pipeline
             victim_bs = getattr(self.args, "victim_batch_size", self.args.batch_size)
 
