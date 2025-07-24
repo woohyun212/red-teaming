@@ -191,6 +191,8 @@ python main.py \
 ```
 
 ```bash
+export VLLM_ALLOW_LONG_MAX_MODEL_LEN=1
+
 python eval.py \
 --ckpt save/llama-gfn/latest \
 --output_file llama-gfn \
