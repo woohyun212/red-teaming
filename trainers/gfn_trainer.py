@@ -23,7 +23,7 @@ from utils import (CosineRelayBuffer, InfIterator, LlamaToxicClassifier,
                    batch_cosine_similarity_kernel, formatted_dict,
                    lora_to_base)
 from vllm import LLM, SamplingParams
-
+from peft import PeftModel
 
 from w00.utils import PresidioClassifier
 
@@ -187,12 +187,26 @@ class GFNTrainer(object):
             if self.victim_model_tokenizer.pad_token_id is None:
                 self.victim_model_tokenizer.pad_token_id = self.victim_model_tokenizer.eos_token_id
 
-            model = AutoModelForCausalLM.from_pretrained(
-                args.victim_model,
-                torch_dtype=getattr(torch, args.dtype),  # 예: torch.bfloat16
+            # 2) 기본 Llama-2-7b 모델 로드
+            base_model = AutoModelForCausalLM.from_pretrained(
+                "meta-llama/Llama-2-7b-chat-hf",
+                torch_dtype=getattr(torch, args.dtype),
                 device_map="auto"
             )
 
+            # 3) LoRA adapter(=args.victim_model 디렉토리) 적용
+            model = PeftModel.from_pretrained(
+                base_model,
+                args.victim_model,
+                ignore_mismatched_sizes=True,
+                device_map="auto"
+            )
+            # 4) 토크나이저 vocab 크기에 맞춰 임베딩 재조정
+            model.resize_token_embeddings(
+                self.victim_model_tokenizer.vocab_size
+            )
+
+            # 5) pipeline으로 감싸기
             self.victim_model = pipeline(
                 model=model,
                 tokenizer=self.victim_model_tokenizer,
