@@ -24,6 +24,7 @@ from utils import (CosineRelayBuffer, InfIterator, LlamaToxicClassifier,
                    lora_to_base)
 from vllm import LLM, SamplingParams
 
+from w00.utils import PresidioClassifier
 
 def avg_pooling(last_hidden, attention_mask):
     input_mask_expanded = attention_mask.unsqueeze(
@@ -193,15 +194,7 @@ class GFNTrainer(object):
             stop_token_ids=stop_token_ids,
             max_tokens=args.victim_max_len)
 
-        if "gpt" in args.victim_model or "dolly" in args.victim_model:
-            self.toxicity_fn = RobertaClassifier(self.device)
-        else:
-            print("llama guard")
-            if "Llama-3" in args.victim_model:
-                version = 3
-            else:
-                version = 1
-            self.toxicity_fn = LlamaToxicClassifier(version=version)
+        self.toxicity_fn = PresidioClassifier(device=self.device)
 
         self.sentence_encoder = SentenceTransformer(
             "sentence-transformers/all-MiniLM-L6-v2", device=self.device)
@@ -416,23 +409,13 @@ class GFNTrainer(object):
                 victim_responses.append(response.text)
                 attack_prompts.append(decoded_responses[i])
 
-        if "gpt2" in self.args.victim_model or "dolly" in self.args.victim_model:
-            c_reward = self.toxicity_fn.compute(predictions=victim_responses)
 
-            c_reward = torch.tensor(c_reward)
-            chunks = torch.split(c_reward, self.args.num_r_samples, dim=0)
-            c_reward = torch.stack(chunks, dim=0)  # [b, r]
+        # 보상함수 교체하기
+        c_log_reward = self.toxicity_fn.compute(responses=victim_responses)
+        chunks = torch.split(c_log_reward, self.args.num_r_samples, dim=0)
+        c_log_reward = torch.stack(chunks, dim=0)  # [b, r]
+        # c_log_reward = torch.log(c_reward)
 
-            c_log_reward = torch.log(c_reward)
-        else:
-            # it gives log-reward
-            c_log_reward = self.toxicity_fn.compute(
-                attack_prompts, victim_responses)
-            c_log_reward = torch.tensor(c_log_reward)
-
-            log_chunks = torch.split(
-                c_log_reward, self.args.num_r_samples, dim=0)
-            c_log_reward = torch.stack(log_chunks, dim=0)  # [b,r]
         avg_c_log_reward = c_log_reward.mean(1).to(self.device)
 
         return lm_logreward, avg_c_log_reward, decoded_responses
@@ -743,3 +726,27 @@ class GFNTrainer(object):
         eval_metrics = self.eval()
         wandb.log(eval_metrics, step=global_step)
         wandb.finish()
+
+"""
+export SFT_CKPT=save/gpt2-sft-position-final/latest
+
+python main.py \
+--exp_name llama-gfn-pii-lora \
+--sim_tolerance 0.3 \
+--victim_model ./save/email-lora-v2/latest \
+--lr 1e-4 \
+--reward_sched_horizon 1000 \
+--train_steps 5000 \
+--buffer_size 5000 \
+--seed 42 \
+--max_len 20 \
+--temp_low 0.7 \
+--temp_high 2.0 \
+--lm_sched_end 1.2 \
+--lm_sched_horizon 2000 \
+--sft_ckpt $SFT_CKPT \
+--compare c_reward \
+--prioritization c_reward \
+--beta 0.1 \
+--metric cosine
+"""
