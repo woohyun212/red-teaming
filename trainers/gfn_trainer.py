@@ -17,12 +17,13 @@ from sentence_transformers import SentenceTransformer
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 from transformers import (AutoConfig, AutoModelForCausalLM, AutoTokenizer,
-                          get_linear_schedule_with_warmup)
+                          get_linear_schedule_with_warmup, pipeline)
 from utils import (CosineRelayBuffer, InfIterator, LlamaToxicClassifier,
                    ReplayBuffer, RobertaClassifier, base_to_lora,
                    batch_cosine_similarity_kernel, formatted_dict,
                    lora_to_base)
 from vllm import LLM, SamplingParams
+
 
 from w00.utils import PresidioClassifier
 
@@ -173,19 +174,60 @@ class GFNTrainer(object):
             args.sft_ckpt, padding_side="left")
         self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
-        self.victim_model = LLM(
-            args.victim_model, dtype=args.dtype, gpu_memory_utilization=args.gpu_memory_utilization)
 
-        self.victim_model_tokenizer = AutoTokenizer.from_pretrained(
-            args.victim_model, padding_side="left")
 
-        self.victim_model_tokenizer.pad_token_id = self.victim_model_tokenizer.eos_token_id
+        # victim tokenizer 및 model 불러오기
+        if os.path.isdir(args.victim_model):
+            # ✅ 로컬 디렉토리로부터 transformers pipeline 방식으로 로딩
+            print(f"[INFO] Using local victim model from directory: {args.victim_model}")
+
+            self.victim_model_tokenizer = AutoTokenizer.from_pretrained(
+                args.victim_model, padding_side="left"
+            )
+            if self.victim_model_tokenizer.pad_token_id is None:
+                self.victim_model_tokenizer.pad_token_id = self.victim_model_tokenizer.eos_token_id
+
+            model = AutoModelForCausalLM.from_pretrained(
+                args.victim_model,
+                torch_dtype=getattr(torch, args.dtype),  # 예: torch.bfloat16
+                device_map="auto"
+            )
+
+            self.victim_model = pipeline(
+                model=model,
+                tokenizer=self.victim_model_tokenizer,
+                task="text-generation",
+                device_map="auto",
+                return_full_text=False,
+                batch_size=args.victim_batch_size,
+                max_new_tokens=args.victim_max_len,
+                temperature=args.victim_temp,
+                top_p=args.victim_top_p,
+                pad_token_id=self.victim_model_tokenizer.pad_token_id,
+                eos_token_id=self.victim_model_tokenizer.eos_token_id,
+                do_sample=True
+            )
+
+            self.use_vllm = False  # 분기 처리를 위한 플래그
+
+        else:
+            # ✅ Hugging Face hub 모델이면 기존 vLLM 방식 사용
+            self.use_vllm = True  # 분기 처리를 위한 플래그
+
+            self.victim_model = LLM(
+                args.victim_model, dtype=args.dtype, gpu_memory_utilization=args.gpu_memory_utilization)
+
+            self.victim_model_tokenizer = AutoTokenizer.from_pretrained(
+                args.victim_model, padding_side="left")
+
+            self.victim_model_tokenizer.pad_token_id = self.victim_model_tokenizer.eos_token_id
 
         if "Llama-3" in args.victim_model:
             stop_token_ids = [self.tokenizer.eos_token_id,
                               self.tokenizer.convert_tokens_to_ids("<|eot_id|>")]
         else:
             stop_token_ids = [self.tokenizer.eos_token_id]
+
 
         self.sampling_params = SamplingParams(
             n=args.num_r_samples,

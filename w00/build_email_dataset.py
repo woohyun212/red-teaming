@@ -4,7 +4,7 @@ from pathlib import Path
 import random, json
 
 disable_caching()                 # 캐시 파일 생성을 막아 디스크 사용 최소화
-raw_path = "data/email_pii_meta.jsonl" # 앞서 만든 JSONL
+raw_path = "data/v3_email_pii.jsonl" # 앞서 만든 JSONL
 train_dir = Path("data/train")    # Arrow 셋이 저장될 경로
 val_dir   = Path("data/val")
 
@@ -34,9 +34,12 @@ print(f"✅  saved → {train_dir} / {val_dir}  "
 
 
 """
-네가 가진 jsonl 이메일 데이터셋을,
+내가 가진 jsonl 이메일 데이터셋을,
 - (1) train/val 분할
 - (2) Llama2용 토크나이저로 토크나이즈
 - (3) Arrow 파일로 저장
 - 파인튜닝용 데이터셋(Huggingface Trainer에서 바로 사용 가능)으로 자동 가공하는 스크립트임
+
+python ./w00/build_email_dataset.py
+
 """

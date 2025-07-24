@@ -139,7 +139,7 @@ def load_victim_config(args):
         json_file = "configs/gpt2.json"
     elif "dolly" in args.victim_model:
         json_file = "configs/dolly.json"
-    elif "llama" in args.victim_model.lower():
+    elif "llama" in args.victim_model.lower() or "email-lora-v2" in args.victim_model.lower():
         json_file = "configs/llama.json"
     elif "gemma" in args.victim_model:
         json_file = "configs/gemma.json"

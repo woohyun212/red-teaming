@@ -110,3 +110,5 @@ if __name__ == "__main__":
                    help="메타데이터(path/from/to/subject) 필드 유지")
     args = p.parse_args()
     main(args.root, args.out, args.keep_meta)
+
+"""python ./w00/maildir_to_jsonl.py --root ./maildir --out ./data/v3_email_pii.jsonl """
