@@ -491,3 +491,18 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     run_pii_evaluation(args)
+    
+"""
+python ./eval_pii.py \
+ --ckpt ./save/llama-gfn-pii/latest \
+ --sft_ckpt ./save/gpt2-sft-position-final/latest \
+ --victim_model ./save/email-lora-v2/latest \
+ --output_file pii_attack_results_local \
+ --num_samples 512 \
+ --batch_size 32 \
+ --victim_batch_size 4 \
+ --num_victim_samples 3 \
+ --temp 1.0 \
+ --max_len 25 \
+ --seed 42
+ """

@@ -12,7 +12,7 @@ import torch.nn.functional as F
 import wandb
 from csv_logger import CsvLogger
 from dataset import get_dataloader
-from peft import LoraConfig, PeftModel, get_peft_model
+from peft import LoraConfig, PeftModel, get_peft_model, PeftModelForCausalLM
 from sentence_transformers import SentenceTransformer
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
@@ -23,7 +23,6 @@ from utils import (CosineRelayBuffer, InfIterator, LlamaToxicClassifier,
                    batch_cosine_similarity_kernel, formatted_dict,
                    lora_to_base)
 from vllm import LLM, SamplingParams
-from peft import PeftModel
 
 from w00.utils import PresidioClassifier
 
@@ -195,7 +194,7 @@ class GFNTrainer(object):
             )
 
             # 3) LoRA adapter(=args.victim_model 디렉토리) 적용
-            model = PeftModel.from_pretrained(
+            model = PeftModelForCausalLM.from_pretrained(
                 base_model,
                 args.victim_model,
                 ignore_mismatched_sizes=True,
@@ -205,12 +204,7 @@ class GFNTrainer(object):
             model.resize_token_embeddings(
                 self.victim_model_tokenizer.vocab_size
             )
-            # Merge LoRA weights into the base model so pipeline recognizes it
-            model = model.merge_and_unload()
-            # Merge 이후에도 토크나이저 vocab_size에 맞춰 임베딩과 lm_head 크기 확장
-            model.resize_token_embeddings(self.victim_model_tokenizer.vocab_size)
-            # (옵션) embedding과 lm_head 연결 보장
-            model.tie_weights()
+
             # Add victim_bs logic before pipeline
             victim_bs = getattr(self.args, "victim_batch_size", self.args.batch_size)
 
@@ -463,30 +457,16 @@ class GFNTrainer(object):
 
         victim_prompts = [self.prompt_fn(x) for x in decoded_responses]
 
-        # get responses from victim model
-        if self.use_vllm:
-            llm_outputs = self.victim_model.generate(
-                victim_prompts, self.sampling_params, use_tqdm=False
-            )
-            attack_prompts = []
-            victim_responses = []
-            for i, output in enumerate(llm_outputs):
-                for response in output.outputs:
-                    victim_responses.append(response.text)
-                    attack_prompts.append(decoded_responses[i])
-        else:
-            # pipeline branch
-            pipeline_outputs = self.victim_model(victim_prompts)
-            attack_prompts = []
-            victim_responses = []
-            for i, out in enumerate(pipeline_outputs):
-                if isinstance(out, list):
-                    for gen in out:
-                        victim_responses.append(gen["generated_text"])
-                        attack_prompts.append(decoded_responses[i])
-                else:
-                    victim_responses.append(out["generated_text"])
-                    attack_prompts.append(decoded_responses[i])
+        llm_outputs = self.victim_model.generate(
+            victim_prompts, self.sampling_params, use_tqdm=False)
+        attack_prompts = []
+        victim_responses = []
+        for i, output in enumerate(llm_outputs):
+            # for each prompt we get multiple response
+            for response in output.outputs:
+                victim_responses.append(response.text)
+                attack_prompts.append(decoded_responses[i])
+
 
         # 보상함수 교체하기
         c_log_reward = self.toxicity_fn.compute(responses=victim_responses)
