@@ -254,5 +254,5 @@ if __name__ == "__main__":
 python eval.py \
 --ckpt save/llama-gfn-pii/latest \
 --output_file llama-gfn \
---victim_model llama
+--victim_model save/email-lora-v2/latest
 """
