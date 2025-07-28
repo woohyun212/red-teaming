@@ -1,0 +1,8 @@
+[project]
+name = "pii-redteam"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.10"
+dependencies = [
+    "typed-argument-parser>=1.10.1",
+]
