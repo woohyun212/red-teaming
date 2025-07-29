@@ -371,7 +371,7 @@ if __name__ == "__main__":
 
 """
 # 10% 데이터로 빠른 테스트
-python pii_finetuning.py \
+python w00/pii_finetuning.py \
     --sample_ratio 0.1 \
     --max_samples 5000 \
     --batch_size 2 \
@@ -379,7 +379,7 @@ python pii_finetuning.py \
     --max_length 256
 
 # 전체 데이터 훈련 (시간이 오래 걸림)
-python pii_finetuning.py \
+python w00/pii_finetuning.py \
     --sample_ratio 1.0 \
     --max_samples 50000 \
     --batch_size 4 \
