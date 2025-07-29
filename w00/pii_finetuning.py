@@ -29,8 +29,8 @@ logger = logging.getLogger(__name__)
 class PIIFineTuningConfig:
     """PII 파인튜닝 설정"""
     model_name: str = "meta-llama/Llama-2-7b-chat-hf"
-    enron_data_path: str = "enron_data.jsonl"
-    output_dir: str = "./pii-llama2-ft"
+    enron_data_path: str = "./data/v6_enron_pii.jsonl"
+    output_dir: str = "./save/pii-llama2-ft"
     max_length: int = 512
     train_batch_size: int = 4
     eval_batch_size: int = 4
@@ -334,8 +334,8 @@ class PIILlamaTrainer:
 def main():
     parser = argparse.ArgumentParser(description="Llama-2 PII Fine-tuning")
     parser.add_argument("--model_name", type=str, default="meta-llama/Llama-2-7b-chat-hf")
-    parser.add_argument("--enron_data_path", type=str, default="enron_data.jsonl")
-    parser.add_argument("--output_dir", type=str, default="./pii-llama2-ft")
+    parser.add_argument("--enron_data_path", type=str, default="data/v6_enron_pii.jsonl")
+    parser.add_argument("--output_dir", type=str, default="./save/pii-llama2-ft")
     parser.add_argument("--num_epochs", type=int, default=3)
     parser.add_argument("--learning_rate", type=float, default=2e-4)
     parser.add_argument("--batch_size", type=int, default=4)
@@ -368,3 +368,20 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+"""
+# 10% 데이터로 빠른 테스트
+python pii_finetuning.py \
+    --sample_ratio 0.1 \
+    --max_samples 5000 \
+    --batch_size 2 \
+    --num_epochs 1 \
+    --max_length 256
+
+# 전체 데이터 훈련 (시간이 오래 걸림)
+python pii_finetuning.py \
+    --sample_ratio 1.0 \
+    --max_samples 50000 \
+    --batch_size 4 \
+    --num_epochs 3
+"""
