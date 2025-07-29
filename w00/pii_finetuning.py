@@ -52,6 +52,10 @@ class PIIFineTuningConfig:
     include_headers: bool = True
     max_pii_examples: int = 5
 
+    # 데이터 처리 설정
+    max_samples: int = 50000  # 최대 학습 샘플 수
+    sample_ratio: float = 1.0  # 데이터 샘플링 비율 (0.1 = 10% 사용)
+
 
 class EnronPIIDataProcessor:
     """Enron 이메일 데이터에서 PII 정보를 추출하여 학습 데이터로 변환"""
@@ -72,7 +76,17 @@ class EnronPIIDataProcessor:
                 except json.JSONDecodeError as e:
                     logger.warning(f"JSON 파싱 오류: {e}")
                     continue
+
         logger.info(f"총 {len(data)}개의 이메일 데이터를 로드했습니다.")
+
+        # 데이터 샘플링 (메모리 및 시간 절약)
+        if self.config.sample_ratio < 1.0:
+            import random
+            random.seed(42)
+            sample_size = int(len(data) * self.config.sample_ratio)
+            data = random.sample(data, sample_size)
+            logger.info(f"데이터 샘플링: {len(data)}개 사용 ({self.config.sample_ratio * 100:.1f}%)")
+
         return data
 
     def extract_pii_examples(self, email_data: Dict) -> List[str]:
@@ -130,8 +144,8 @@ class EnronPIIDataProcessor:
         # Llama-2 Chat 형식으로 변환
         conversation = f"<s>[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n{user_prompt} [/INST] {assistant_response}</s>"
 
-        # 토큰 길이 미리 확인
-        temp_tokens = AutoTokenizer.from_pretrained(self.config.model_name)(conversation)
+        # 토큰 길이 미리 확인 (기존 토크나이저 사용)
+        temp_tokens = self.tokenizer(conversation, return_tensors=None)
         if len(temp_tokens['input_ids']) > self.config.max_length:
             # 너무 길면 텍스트를 더 줄임
             truncated_text = text[:100] + "..."
@@ -149,28 +163,37 @@ class EnronPIIDataProcessor:
         enron_data = self.load_enron_data()
         all_examples = []
 
+        logger.info("학습 예제 생성 중...")
+        processed_count = 0
+
         for email_data in enron_data:
             examples = self.create_training_examples(email_data)
             all_examples.extend(examples)
 
+            processed_count += 1
+            if processed_count % 10000 == 0:
+                logger.info(
+                    f"처리 완료: {processed_count}/{len(enron_data)} ({processed_count / len(enron_data) * 100:.1f}%)")
+
         logger.info(f"총 {len(all_examples)}개의 학습 예제를 생성했습니다.")
 
-        # 토큰화 함수 수정
-        def tokenize_function(examples):
-            # 단일 예제 처리
-            if isinstance(examples['text'], str):
-                texts = [examples['text']]
-            else:
-                texts = examples['text']
+        # 데이터가 너무 많으면 샘플링
+        if len(all_examples) > 50000:  # 최대 5만개로 제한
+            import random
+            random.seed(42)
+            all_examples = random.sample(all_examples, 50000)
+            logger.info(f"데이터 샘플링: {len(all_examples)}개 사용")
 
-            # 토크나이제이션 (패딩 없이)
+        # 토큰화 함수 수정
+        def tokenize_function(example):
+            # 개별 예제 처리
             tokenized = self.tokenizer(
-                texts,
+                example['text'],
                 truncation=True,
                 padding=False,  # 여기서는 패딩 하지 않음
                 max_length=self.config.max_length,
                 return_tensors=None,
-                add_special_tokens=True
+                add_special_tokens=False  # 이미 추가됨
             )
 
             # labels를 input_ids와 동일하게 설정
@@ -180,11 +203,13 @@ class EnronPIIDataProcessor:
 
         dataset = Dataset.from_list(all_examples)
 
-        # 배치 단위로 토큰화 적용
+        # 개별 처리로 변경
+        logger.info("토큰화 진행 중...")
         tokenized_dataset = dataset.map(
             tokenize_function,
-            batched=False,  # 배치 처리 비활성화
-            remove_columns=dataset.column_names
+            batched=False,
+            remove_columns=dataset.column_names,
+            num_proc=4  # 멀티프로세싱으로 속도 향상
         )
 
         return tokenized_dataset
@@ -315,6 +340,8 @@ def main():
     parser.add_argument("--learning_rate", type=float, default=2e-4)
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--max_length", type=int, default=512)
+    parser.add_argument("--sample_ratio", type=float, default=0.1, help="데이터 샘플링 비율 (0.1 = 10%)")
+    parser.add_argument("--max_samples", type=int, default=10000, help="최대 학습 샘플 수")
 
     args = parser.parse_args()
 
@@ -326,7 +353,9 @@ def main():
         num_epochs=args.num_epochs,
         learning_rate=args.learning_rate,
         train_batch_size=args.batch_size,
-        max_length=args.max_length
+        max_length=args.max_length,
+        sample_ratio=args.sample_ratio,
+        max_samples=args.max_samples
     )
 
     # 출력 디렉터리 생성
