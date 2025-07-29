@@ -98,25 +98,3 @@ if __name__ == "__main__":
     else:
         trainer = SFTTrainer(args)
     trainer.train()
-
-"""
-python main.py \
---exp_name llama-gfn \
---sim_tolerance 0.3 \
---victim_model meta-llama/Llama-2-7b-chat-hf \
---lr 1e-4 \
---reward_sched_horizon 1000 \
---train_steps 5000 \
---buffer_size 5000 \
---seed 42 \
---max_len 20 \
---temp_low 0.7 \
---temp_high 2.0 \
---lm_sched_end 1.2 \
---lm_sched_horizon 2000 \
---sft_ckpt $SFT_CKPT \
---compare c_reward \
---prioritization c_reward \
---beta 0.1 \
---metric cosine
-"""
