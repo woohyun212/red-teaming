@@ -20,6 +20,7 @@ from transformers import (
 )
 from peft import LoraConfig, get_peft_model, TaskType
 import argparse
+from transformers import default_data_collator
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -190,7 +191,7 @@ class EnronPIIDataProcessor:
             tokenized = self.tokenizer(
                 example['text'],
                 truncation=True,
-                padding=False,  # 여기서는 패딩 하지 않음
+                padding="max_length",  # 고정 길이로 패딩
                 max_length=self.config.max_length,
                 return_tensors=None,
                 add_special_tokens=False  # 이미 추가됨
@@ -198,6 +199,12 @@ class EnronPIIDataProcessor:
 
             # labels를 input_ids와 동일하게 설정
             tokenized['labels'] = tokenized['input_ids'].copy()
+
+            # -100으로 패딩 토큰 마스킹 (loss 계산에서 제외)
+            tokenized['labels'] = [
+                token_id if token_id != self.tokenizer.pad_token_id else -100
+                for token_id in tokenized['labels']
+            ]
 
             return tokenized
 
@@ -209,8 +216,15 @@ class EnronPIIDataProcessor:
             tokenize_function,
             batched=False,
             remove_columns=dataset.column_names,
-            num_proc=4  # 멀티프로세싱으로 속도 향상
+            num_proc=1  # 단일 프로세스로 안정성 확보
         )
+
+        # 너무 짧은 시퀀스 필터링
+        def filter_function(example):
+            return len([x for x in example['input_ids'] if x != self.tokenizer.pad_token_id]) >= 10
+
+        tokenized_dataset = tokenized_dataset.filter(filter_function)
+        logger.info(f"필터링 후 데이터셋 크기: {len(tokenized_dataset)}")
 
         return tokenized_dataset
 
@@ -275,13 +289,9 @@ class PIILlamaTrainer:
 
         logger.info(f"훈련 데이터: {len(train_dataset)}, 검증 데이터: {len(eval_dataset)}")
 
-        # 데이터 콜레이터 설정 수정
-        data_collator = DataCollatorForLanguageModeling(
-            tokenizer=self.tokenizer,
-            mlm=False,  # GPT 스타일 언어 모델링
-            pad_to_multiple_of=8,  # 효율성을 위해 8의 배수로 패딩
-            return_tensors="pt"
-        )
+        # 간단한 데이터 콜레이터 사용
+
+        data_collator = default_data_collator
 
         # 훈련 설정
         training_args = TrainingArguments(
@@ -296,7 +306,7 @@ class PIILlamaTrainer:
             logging_steps=50,
             save_steps=self.config.save_steps,
             eval_steps=self.config.eval_steps,
-            evaluation_strategy="steps",
+            eval_strategy="steps",
             save_strategy="steps",
             load_best_model_at_end=True,
             metric_for_best_model="eval_loss",
@@ -305,8 +315,7 @@ class PIILlamaTrainer:
             dataloader_pin_memory=False,
             remove_unused_columns=False,
             dataloader_drop_last=True,  # 불완전한 배치 제거
-            group_by_length=True,  # 비슷한 길이끼리 그룹화
-            length_column_name="input_ids",  # 길이 기준 컬럼
+            group_by_length=False,  # 길이 그룹화 비활성화 (오류 방지)
             report_to=None,  # wandb 등 사용하려면 변경
         )
 
