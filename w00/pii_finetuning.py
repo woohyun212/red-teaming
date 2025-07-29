@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 class PIIFineTuningConfig:
     """PII 파인튜닝 설정"""
     model_name: str = "meta-llama/Llama-2-7b-chat-hf"
-    enron_data_path: str = "enron_data.jsonl"
+    enron_data_path: str = "./data/v6_enron_pii.jsonl"
     output_dir: str = "./pii-llama2-ft"
     max_length: int = 512
     train_batch_size: int = 4
@@ -147,7 +147,7 @@ class EnronPIIDataProcessor:
             tokenized = self.tokenizer(
                 examples['text'],
                 truncation=True,
-                padding=False,
+                padding=True,
                 max_length=self.config.max_length,
                 return_tensors=None
             )
@@ -233,7 +233,7 @@ class PIILlamaTrainer:
             logging_steps=50,
             save_steps=self.config.save_steps,
             eval_steps=self.config.eval_steps,
-            evaluation_strategy="steps",
+            eval_strategy="steps",
             save_strategy="steps",
             load_best_model_at_end=True,
             metric_for_best_model="eval_loss",

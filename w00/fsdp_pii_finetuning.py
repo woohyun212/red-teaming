@@ -88,46 +88,34 @@ class FSDPEnronPIIDataProcessor:
 
     def __init__(self, config: FSDPPIIFineTuningConfig):
         self.config = config
-        # 분산 환경에서는 rank 0에서만 토크나이저 로드
-        if not dist.is_initialized() or dist.get_rank() == 0:
-            self.tokenizer = AutoTokenizer.from_pretrained(config.model_name)
-            if self.tokenizer.pad_token is None:
-                self.tokenizer.pad_token = self.tokenizer.eos_token
-        else:
-            self.tokenizer = None
+        # 모든 rank에서 토크나이저 로드 (필요시)
+        self.tokenizer = AutoTokenizer.from_pretrained(config.model_name)
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
 
     def load_enron_data(self) -> List[Dict]:
-        """Enron JSONL 데이터 로드"""
+        """Enron JSONL 데이터 로드 - 모든 rank에서 동일하게 로드"""
         data = []
-        # 분산 환경에서는 rank 0에서만 데이터 로드
-        if not dist.is_initialized() or dist.get_rank() == 0:
+
+        # 모든 rank에서 동일하게 데이터 로드
+        try:
             with open(self.config.enron_data_path, 'r', encoding='utf-8') as f:
                 for line in f:
                     try:
                         data.append(json.loads(line.strip()))
                     except json.JSONDecodeError as e:
-                        logger.warning(f"JSON 파싱 오류: {e}")
+                        if not dist.is_initialized() or dist.get_rank() == 0:
+                            logger.warning(f"JSON 파싱 오류: {e}")
                         continue
-            logger.info(f"총 {len(data)}개의 이메일 데이터를 로드했습니다.")
 
-        # 다른 rank들과 데이터 동기화
-        if dist.is_initialized():
-            # 브로드캐스트를 위해 모든 rank에서 같은 크기의 객체 필요
-            if dist.get_rank() == 0:
-                data_size = len(data)
-            else:
-                data_size = 0
+            if not dist.is_initialized() or dist.get_rank() == 0:
+                logger.info(f"총 {len(data)}개의 이메일 데이터를 로드했습니다.")
 
-            # 데이터 크기 브로드캐스트
-            data_size_tensor = torch.tensor(data_size, device='cuda')
-            dist.broadcast(data_size_tensor, src=0)
-
-            # rank 0이 아닌 경우 빈 리스트 생성
-            if dist.get_rank() != 0:
-                data = [None] * data_size_tensor.item()
-
-            # 실제 데이터 브로드캐스트 (간단화를 위해 여기서는 생략)
-            # 실제로는 pickle을 사용하여 브로드캐스트하거나 각 rank에서 독립적으로 로드
+        except FileNotFoundError:
+            if not dist.is_initialized() or dist.get_rank() == 0:
+                logger.error(f"데이터 파일을 찾을 수 없습니다: {self.config.enron_data_path}")
+            # 빈 데이터로 계속 진행하지 않고 오류 발생
+            raise
 
         return data
 
@@ -158,6 +146,11 @@ class FSDPEnronPIIDataProcessor:
     def create_training_examples(self, email_data: Dict) -> List[Dict]:
         """PII 정보를 포함한 학습 예제 생성"""
         examples = []
+
+        # None 체크 추가
+        if email_data is None:
+            return examples
+
         pii_examples = self.extract_pii_examples(email_data)
         text = email_data.get('text', '')
 
@@ -188,20 +181,26 @@ class FSDPEnronPIIDataProcessor:
         all_examples = []
 
         for email_data in enron_data:
-            if email_data is not None:  # None 체크 추가
-                examples = self.create_training_examples(email_data)
-                all_examples.extend(examples)
+            examples = self.create_training_examples(email_data)
+            all_examples.extend(examples)
 
-        logger.info(f"총 {len(all_examples)}개의 학습 예제를 생성했습니다.")
+        # 최소 데이터 확인
+        if len(all_examples) == 0:
+            # 최소한의 더미 데이터라도 생성
+            dummy_example = {
+                'text': "<s>[INST] Extract PII from email. [/INST] No PII found.</s>",
+                'labels': "<s>[INST] Extract PII from email. [/INST] No PII found.</s>"
+            }
+            all_examples = [dummy_example]
+
+            if not dist.is_initialized() or dist.get_rank() == 0:
+                logger.warning("데이터가 없어 더미 예제를 생성했습니다.")
+
+        if not dist.is_initialized() or dist.get_rank() == 0:
+            logger.info(f"총 {len(all_examples)}개의 학습 예제를 생성했습니다.")
 
         # 토큰화
         def tokenize_function(examples):
-            if self.tokenizer is None:
-                # 분산 환경에서 tokenizer가 없는 경우 다시 로드
-                self.tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
-                if self.tokenizer.pad_token is None:
-                    self.tokenizer.pad_token = self.tokenizer.eos_token
-
             tokenized = self.tokenizer(
                 examples['text'],
                 truncation=True,
@@ -217,7 +216,7 @@ class FSDPEnronPIIDataProcessor:
             tokenize_function,
             batched=True,
             remove_columns=dataset.column_names,
-            num_proc=self.config.dataloader_num_workers if not dist.is_initialized() else 1
+            num_proc=1  # 분산 환경에서는 1로 고정
         )
 
         return tokenized_dataset
@@ -250,58 +249,6 @@ class FSDPPIILlamaTrainer:
             self.world_size = 1
             self.rank = 0
             logger.info("단일 GPU 모드")
-
-    def get_fsdp_config(self):
-        """FSDP 설정 생성"""
-        # Sharding Strategy
-        sharding_strategy_map = {
-            "FULL_SHARD": ShardingStrategy.FULL_SHARD,
-            "SHARD_GRAD_OP": ShardingStrategy.SHARD_GRAD_OP,
-            "NO_SHARD": ShardingStrategy.NO_SHARD,
-            "HYBRID_SHARD": ShardingStrategy.HYBRID_SHARD,
-        }
-
-        # Backward Prefetch
-        backward_prefetch_map = {
-            "BACKWARD_PRE": BackwardPrefetch.BACKWARD_PRE,
-            "BACKWARD_POST": BackwardPrefetch.BACKWARD_POST,
-            "NO_PREFETCH": None,
-        }
-
-        # Auto Wrap Policy
-        if self.config.fsdp_auto_wrap_policy == "transformer_based":
-            auto_wrap_policy = partial(
-                transformer_auto_wrap_policy,
-                transformer_layer_cls={LlamaDecoderLayer}
-            )
-        elif self.config.fsdp_auto_wrap_policy == "size_based":
-            auto_wrap_policy = partial(
-                size_based_auto_wrap_policy,
-                min_num_params=self.config.fsdp_min_num_params
-            )
-        else:
-            auto_wrap_policy = None
-
-        # Mixed Precision
-        mixed_precision = None
-        if self.config.fsdp_mixed_precision:
-            mixed_precision = MixedPrecision(
-                param_dtype=torch.float16,
-                reduce_dtype=torch.float16,
-                buffer_dtype=torch.float16,
-            )
-
-        # CPU Offload
-        cpu_offload = CPUOffload(offload_params=True) if self.config.fsdp_cpu_offload else None
-
-        return {
-            "sharding_strategy": sharding_strategy_map[self.config.fsdp_sharding_strategy],
-            "auto_wrap_policy": auto_wrap_policy,
-            "mixed_precision": mixed_precision,
-            "backward_prefetch": backward_prefetch_map[self.config.fsdp_backward_prefetch],
-            "cpu_offload": cpu_offload,
-            "device_id": self.local_rank,
-        }
 
     def setup_model_and_tokenizer(self):
         """모델과 토크나이저 설정"""
@@ -351,14 +298,47 @@ class FSDPPIILlamaTrainer:
 
     def train(self):
         """FSDP를 사용한 모델 파인튜닝 실행"""
+        # 데이터 경로 확인
+        if self.rank == 0:
+            logger.info(f"데이터 파일 경로: {self.config.enron_data_path}")
+            logger.info(f"파일 존재 여부: {os.path.exists(self.config.enron_data_path)}")
+            if os.path.exists(self.config.enron_data_path):
+                with open(self.config.enron_data_path, 'r') as f:
+                    line_count = sum(1 for _ in f)
+                logger.info(f"데이터 파일 라인 수: {line_count}")
+
+        # 분산 환경에서 동기화
+        if dist.is_initialized():
+            dist.barrier()
+
         # 데이터 준비
         data_processor = FSDPEnronPIIDataProcessor(self.config)
         dataset = data_processor.create_dataset()
 
+        # 데이터셋 크기 확인
+        if self.rank == 0:
+            logger.info(f"생성된 데이터셋 크기: {len(dataset)}")
+
+        # 최소 데이터셋 크기 보장
+        if len(dataset) < 10:
+            if self.rank == 0:
+                logger.warning(f"데이터셋이 너무 작습니다 ({len(dataset)}개). 최소 10개 필요.")
+            # 데이터를 복제하여 최소 크기 보장
+            original_data = list(dataset)
+            while len(original_data) < 10:
+                original_data.extend(original_data[:min(len(original_data), 10 - len(original_data))])
+            dataset = Dataset.from_list(original_data)
+
         # 훈련/검증 분할
-        train_size = int(0.9 * len(dataset))
+        train_size = max(int(0.9 * len(dataset)), 1)  # 최소 1개는 보장
+        eval_size = max(len(dataset) - train_size, 1)  # 최소 1개는 보장
+
+        if train_size >= len(dataset):
+            train_size = len(dataset) - 1
+            eval_size = 1
+
         train_dataset = dataset.select(range(train_size))
-        eval_dataset = dataset.select(range(train_size, len(dataset)))
+        eval_dataset = dataset.select(range(train_size, train_size + eval_size))
 
         if self.rank == 0:
             logger.info(f"훈련 데이터: {len(train_dataset)}, 검증 데이터: {len(eval_dataset)}")
@@ -369,9 +349,6 @@ class FSDPPIILlamaTrainer:
             mlm=False,
             pad_to_multiple_of=8
         )
-
-        # FSDP 관련 훈련 설정
-        fsdp_config = self.get_fsdp_config()
 
         # 훈련 설정
         training_args = TrainingArguments(
@@ -386,7 +363,7 @@ class FSDPPIILlamaTrainer:
             logging_steps=50,
             save_steps=self.config.save_steps,
             eval_steps=self.config.eval_steps,
-            evaluation_strategy="steps",
+            eval_strategy="steps",  # evaluation_strategy -> eval_strategy로 변경
             save_strategy="steps",
             load_best_model_at_end=True,
             metric_for_best_model="eval_loss",
@@ -394,7 +371,14 @@ class FSDPPIILlamaTrainer:
 
             # FSDP 설정
             fsdp=["full_shard", "auto_wrap"] if self.world_size > 1 else [],
-            fsdp_config=fsdp_config if self.world_size > 1 else None,
+            fsdp_config={
+                "fsdp_backward_prefetch": self.config.fsdp_backward_prefetch.lower(),
+                "fsdp_sharding_strategy": self.config.fsdp_sharding_strategy.lower(),
+                "fsdp_cpu_offload": self.config.fsdp_cpu_offload,
+                "fsdp_transformer_layer_cls_to_wrap": [self.config.fsdp_transformer_layer_cls_to_wrap],
+                "fsdp_auto_wrap_policy": self.config.fsdp_auto_wrap_policy,
+                "fsdp_state_dict_type": "FULL_STATE_DICT",
+            } if self.world_size > 1 else None,
 
             # 성능 최적화 설정
             bf16=True if torch.cuda.is_bf16_supported() else False,

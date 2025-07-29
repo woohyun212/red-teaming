@@ -4,13 +4,14 @@
 # 기본 설정
 NUM_GPUS=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
 MODEL_NAME="meta-llama/Llama-2-7b-chat-hf"
-DATA_PATH="enron_data.jsonl"
-OUTPUT_DIR="./fsdp-pii-llama2-ft"
+DATA_PATH="./data/v6_enron_pii.jsonl"
+OUTPUT_DIR="./output_dir/fsdp-pii-llama2-ft"
 BATCH_SIZE=2
 GRAD_ACCUM=8
 MAX_LENGTH=512
 EPOCHS=3
 LR=2e-4
+SCRIPT_PATH="./w00/fsdp_pii_finetuning.py"
 
 echo "=== FSDP PII Fine-tuning 시작 ==="
 echo "GPU 개수: $NUM_GPUS"
@@ -21,7 +22,7 @@ echo "출력 디렉터리: $OUTPUT_DIR"
 # GPU 개수에 따른 설정 조정
 if [ $NUM_GPUS -eq 1 ]; then
     echo "단일 GPU 모드로 실행합니다."
-    python fsdp_pii_finetuning.py \
+    python $SCRIPT_PATH \
         --model_name $MODEL_NAME \
         --enron_data_path $DATA_PATH \
         --output_dir $OUTPUT_DIR \
@@ -38,7 +39,7 @@ elif [ $NUM_GPUS -eq 2 ]; then
     torchrun \
         --standalone \
         --nproc_per_node=2 \
-        fsdp_pii_finetuning.py \
+        $SCRIPT_PATH \
         --model_name $MODEL_NAME \
         --enron_data_path $DATA_PATH \
         --output_dir $OUTPUT_DIR \
@@ -56,7 +57,7 @@ elif [ $NUM_GPUS -eq 4 ]; then
     torchrun \
         --standalone \
         --nproc_per_node=4 \
-        fsdp_pii_finetuning.py \
+        $SCRIPT_PATH \
         --model_name $MODEL_NAME \
         --enron_data_path $DATA_PATH \
         --output_dir $OUTPUT_DIR \
@@ -74,7 +75,7 @@ elif [ $NUM_GPUS -eq 8 ]; then
     torchrun \
         --standalone \
         --nproc_per_node=8 \
-        fsdp_pii_finetuning.py \
+        $SCRIPT_PATH \
         --model_name $MODEL_NAME \
         --enron_data_path $DATA_PATH \
         --output_dir $OUTPUT_DIR \
