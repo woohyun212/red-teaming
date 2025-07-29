@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 class PIIFineTuningConfig:
     """PII 파인튜닝 설정"""
     model_name: str = "meta-llama/Llama-2-7b-chat-hf"
-    enron_data_path: str = "./data/v6_enron_pii.jsonl"
+    enron_data_path: str = "enron_data.jsonl"
     output_dir: str = "./pii-llama2-ft"
     max_length: int = 512
     train_batch_size: int = 4
@@ -115,8 +115,14 @@ class EnronPIIDataProcessor:
         # 시스템 프롬프트 (Llama-2 Chat 형식)
         system_prompt = "You are a helpful assistant that can extract and organize personal information from emails."
 
+        # 텍스트 길이 제한 (너무 긴 텍스트 방지)
+        max_text_length = 200
+        truncated_text = text[:max_text_length]
+        if len(text) > max_text_length:
+            truncated_text += "..."
+
         # 사용자 질문
-        user_prompt = f"Extract and summarize the personal information from this email:\n\n{text[:300]}..."
+        user_prompt = f"Extract and summarize the personal information from this email:\n\n{truncated_text}"
 
         # 어시스턴트 응답 (PII 정보)
         assistant_response = f"Here is the personal information found in the email:\n\n{pii_summary}"
@@ -124,9 +130,16 @@ class EnronPIIDataProcessor:
         # Llama-2 Chat 형식으로 변환
         conversation = f"<s>[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n{user_prompt} [/INST] {assistant_response}</s>"
 
+        # 토큰 길이 미리 확인
+        temp_tokens = AutoTokenizer.from_pretrained(self.config.model_name)(conversation)
+        if len(temp_tokens['input_ids']) > self.config.max_length:
+            # 너무 길면 텍스트를 더 줄임
+            truncated_text = text[:100] + "..."
+            user_prompt = f"Extract personal information from: {truncated_text}"
+            conversation = f"<s>[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n{user_prompt} [/INST] {assistant_response}</s>"
+
         examples.append({
-            'text': conversation,
-            'labels': conversation  # 자기 지도 학습
+            'text': conversation
         })
 
         return examples
@@ -142,22 +155,35 @@ class EnronPIIDataProcessor:
 
         logger.info(f"총 {len(all_examples)}개의 학습 예제를 생성했습니다.")
 
-        # 토큰화
+        # 토큰화 함수 수정
         def tokenize_function(examples):
+            # 단일 예제 처리
+            if isinstance(examples['text'], str):
+                texts = [examples['text']]
+            else:
+                texts = examples['text']
+
+            # 토크나이제이션 (패딩 없이)
             tokenized = self.tokenizer(
-                examples['text'],
+                texts,
                 truncation=True,
-                padding=True,
+                padding=False,  # 여기서는 패딩 하지 않음
                 max_length=self.config.max_length,
-                return_tensors=None
+                return_tensors=None,
+                add_special_tokens=True
             )
+
+            # labels를 input_ids와 동일하게 설정
             tokenized['labels'] = tokenized['input_ids'].copy()
+
             return tokenized
 
         dataset = Dataset.from_list(all_examples)
+
+        # 배치 단위로 토큰화 적용
         tokenized_dataset = dataset.map(
             tokenize_function,
-            batched=True,
+            batched=False,  # 배치 처리 비활성화
             remove_columns=dataset.column_names
         )
 
@@ -175,9 +201,16 @@ class PIILlamaTrainer:
         """모델과 토크나이저 설정"""
         logger.info(f"모델 로딩: {self.config.model_name}")
 
-        self.tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
+        # 토크나이저 설정
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            self.config.model_name,
+            trust_remote_code=True
+        )
+
+        # 패딩 토큰 설정
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
         # 모델 로드 (8bit 양자화 옵션)
         self.model = AutoModelForCausalLM.from_pretrained(
@@ -188,6 +221,9 @@ class PIILlamaTrainer:
             trust_remote_code=True
         )
 
+        # 모델의 패딩 토큰 설정
+        self.model.config.pad_token_id = self.tokenizer.pad_token_id
+
         # LoRA 설정
         if self.config.use_lora:
             lora_config = LoraConfig(
@@ -195,7 +231,8 @@ class PIILlamaTrainer:
                 r=self.config.lora_r,
                 lora_alpha=self.config.lora_alpha,
                 lora_dropout=self.config.lora_dropout,
-                target_modules=["q_proj", "v_proj", "k_proj", "o_proj"]
+                target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
+                bias="none"
             )
             self.model = get_peft_model(self.model, lora_config)
             self.model.print_trainable_parameters()
@@ -213,11 +250,12 @@ class PIILlamaTrainer:
 
         logger.info(f"훈련 데이터: {len(train_dataset)}, 검증 데이터: {len(eval_dataset)}")
 
-        # 데이터 콜레이터
+        # 데이터 콜레이터 설정 수정
         data_collator = DataCollatorForLanguageModeling(
             tokenizer=self.tokenizer,
-            mlm=False,
-            pad_to_multiple_of=8
+            mlm=False,  # GPT 스타일 언어 모델링
+            pad_to_multiple_of=8,  # 효율성을 위해 8의 배수로 패딩
+            return_tensors="pt"
         )
 
         # 훈련 설정
@@ -233,7 +271,7 @@ class PIILlamaTrainer:
             logging_steps=50,
             save_steps=self.config.save_steps,
             eval_steps=self.config.eval_steps,
-            eval_strategy="steps",
+            evaluation_strategy="steps",
             save_strategy="steps",
             load_best_model_at_end=True,
             metric_for_best_model="eval_loss",
@@ -241,6 +279,9 @@ class PIILlamaTrainer:
             fp16=True,
             dataloader_pin_memory=False,
             remove_unused_columns=False,
+            dataloader_drop_last=True,  # 불완전한 배치 제거
+            group_by_length=True,  # 비슷한 길이끼리 그룹화
+            length_column_name="input_ids",  # 길이 기준 컬럼
             report_to=None,  # wandb 등 사용하려면 변경
         )
 
