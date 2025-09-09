@@ -1,396 +1,130 @@
-#!/usr/bin/env python3
-"""
-Llama-2 PII Fine-tuning Script using Enron Email Dataset
-PII(개인정보) 데이터로 Llama-2-7b-chat-hf 모델을 파인튜닝합니다.
-"""
+from datasets import load_dataset
+from transformers import AutoTokenizer, BitsAndBytesConfig, AutoModelForCausalLM
+from transformers import (AutoModelForCausalLM, TrainingArguments, Trainer,
+                          DataCollatorForLanguageModeling)
+from transformers import DataCollatorWithPadding
+from peft import LoraConfig, get_peft_model
 
-import json
-import os
+from random import randint
 import torch
-import logging
-from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
-from datasets import Dataset
-from transformers import (
-    AutoTokenizer,
-    AutoModelForCausalLM,
-    TrainingArguments,
-    Trainer,
-    DataCollatorForLanguageModeling
+from pprint import  pp
+import json
+TRAIN_NAME = "email_lora"
+SAVE_PATH = f"save/{TRAIN_NAME}"
+DATA_PATH = f"data/v6_enron_pii.jsonl"
+SAMPLE_SIZE = 50000
+SAMPLE_OUTPUT_PATH = "data/sampled_dataset.jsonl"
+suffle_seed = randint(0, 50)
+
+
+def merge_fields(example):
+    # 한 통(e-mail) → 하나의 plain text로 합치기
+    # (선택) 헤더까지 포함하고 싶으면 아래처럼 붙이기
+    # hdr = example["headers"]
+    # header_txt = f"From: {hdr['x_from']} <{hdr['from_email']}>\n" \
+    #              f"To: {hdr['x_to']} <{', '.join(hdr['to_email'])}>\n" \
+    #              f"Date: {hdr['date']}\n" \
+    #              f""
+    # example["text"] = header_txt + example["text"]
+    # pp(dict(example)["text"])
+    return {"text": example["text"]}
+
+
+
+def tokenize(sample):
+    return tokenizer(sample["text"])
+
+
+def group_texts(examples):
+    concat = sum(examples["input_ids"], [])
+    total = len(concat) // block_size * block_size
+    result = [concat[i: i + block_size] for i in range(0, total, block_size)]
+    return {"input_ids": result, "labels": result}
+
+
+# 데이터 로딩
+print("데이터 로드")
+raw_ds = load_dataset(
+    "json",
+    data_files=DATA_PATH,
+    split="train"
 )
-from peft import LoraConfig, get_peft_model, TaskType
-import argparse
-from transformers import default_data_collator
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-
-@dataclass
-class PIIFineTuningConfig:
-    """PII 파인튜닝 설정"""
-    model_name: str = "meta-llama/Llama-2-7b-chat-hf"
-    enron_data_path: str = "./data/v6_enron_pii.jsonl"
-    output_dir: str = "./save/pii-llama2-ft"
-    max_length: int = 512
-    train_batch_size: int = 4
-    eval_batch_size: int = 4
-    num_epochs: int = 3
-    learning_rate: float = 2e-4
-    warmup_steps: int = 100
-    save_steps: int = 500
-    eval_steps: int = 500
-    gradient_accumulation_steps: int = 4
-
-    # LoRA 설정
-    use_lora: bool = True
-    lora_r: int = 16
-    lora_alpha: int = 32
-    lora_dropout: float = 0.1
-
-    # PII 관련 설정
-    pii_types: List[str] = field(default_factory=lambda: ["email", "phone", "name", "loc"])
-    include_headers: bool = True
-    max_pii_examples: int = 5
-
-    # 데이터 처리 설정
-    max_samples: int = 50000  # 최대 학습 샘플 수
-    sample_ratio: float = 1.0  # 데이터 샘플링 비율 (0.1 = 10% 사용)
-
-
-class EnronPIIDataProcessor:
-    """Enron 이메일 데이터에서 PII 정보를 추출하여 학습 데이터로 변환"""
-
-    def __init__(self, config: PIIFineTuningConfig):
-        self.config = config
-        self.tokenizer = AutoTokenizer.from_pretrained(config.model_name)
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-
-    def load_enron_data(self) -> List[Dict]:
-        """Enron JSONL 데이터 로드"""
-        data = []
-        with open(self.config.enron_data_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                try:
-                    data.append(json.loads(line.strip()))
-                except json.JSONDecodeError as e:
-                    logger.warning(f"JSON 파싱 오류: {e}")
-                    continue
-
-        logger.info(f"총 {len(data)}개의 이메일 데이터를 로드했습니다.")
-
-        # 데이터 샘플링 (메모리 및 시간 절약)
-        if self.config.sample_ratio < 1.0:
-            import random
-            random.seed(42)
-            sample_size = int(len(data) * self.config.sample_ratio)
-            data = random.sample(data, sample_size)
-            logger.info(f"데이터 샘플링: {len(data)}개 사용 ({self.config.sample_ratio * 100:.1f}%)")
-
-        return data
-
-    def extract_pii_examples(self, email_data: Dict) -> List[str]:
-        """이메일 데이터에서 PII 예제들을 추출"""
-        pii_examples = []
-        pii_info = email_data.get('pii', {})
-        headers = email_data.get('headers', {})
-        text = email_data.get('text', '')
-
-        # 헤더 정보에서 PII 추출
-        if self.config.include_headers:
-            if headers.get('from_email'):
-                pii_examples.append(f"From: {headers['from_email']}")
-            if headers.get('to_email'):
-                to_emails = headers['to_email'] if isinstance(headers['to_email'], list) else [headers['to_email']]
-                pii_examples.append(f"To: {', '.join(to_emails)}")
-
-        # PII 타입별로 정보 추출
-        for pii_type in self.config.pii_types:
-            if pii_type in pii_info and pii_info[pii_type]:
-                pii_list = pii_info[pii_type][:self.config.max_pii_examples]
-                for pii_item in pii_list:
-                    if pii_item and pii_item.strip():
-                        pii_examples.append(f"{pii_type.title()}: {pii_item.strip()}")
-
-        return pii_examples
-
-    def create_training_examples(self, email_data: Dict) -> List[Dict]:
-        """PII 정보를 포함한 학습 예제 생성"""
-        examples = []
-        pii_examples = self.extract_pii_examples(email_data)
-        text = email_data.get('text', '')
-
-        if not pii_examples or not text:
-            return examples
-
-        # PII 정보 요약 생성 프롬프트
-        pii_summary = "\n".join(pii_examples[:5])  # 최대 5개만 사용
-
-        # 시스템 프롬프트 (Llama-2 Chat 형식)
-        system_prompt = "You are a helpful assistant that can extract and organize personal information from emails."
-
-        # 텍스트 길이 제한 (너무 긴 텍스트 방지)
-        max_text_length = 200
-        truncated_text = text[:max_text_length]
-        if len(text) > max_text_length:
-            truncated_text += "..."
-
-        # 사용자 질문
-        user_prompt = f"Extract and summarize the personal information from this email:\n\n{truncated_text}"
-
-        # 어시스턴트 응답 (PII 정보)
-        assistant_response = f"Here is the personal information found in the email:\n\n{pii_summary}"
-
-        # Llama-2 Chat 형식으로 변환
-        conversation = f"<s>[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n{user_prompt} [/INST] {assistant_response}</s>"
-
-        # 토큰 길이 미리 확인 (기존 토크나이저 사용)
-        temp_tokens = self.tokenizer(conversation, return_tensors=None)
-        if len(temp_tokens['input_ids']) > self.config.max_length:
-            # 너무 길면 텍스트를 더 줄임
-            truncated_text = text[:100] + "..."
-            user_prompt = f"Extract personal information from: {truncated_text}"
-            conversation = f"<s>[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n{user_prompt} [/INST] {assistant_response}</s>"
-
-        examples.append({
-            'text': conversation
-        })
-
-        return examples
-
-    def create_dataset(self) -> Dataset:
-        """학습용 데이터셋 생성"""
-        enron_data = self.load_enron_data()
-        all_examples = []
-
-        logger.info("학습 예제 생성 중...")
-        processed_count = 0
-
-        for email_data in enron_data:
-            examples = self.create_training_examples(email_data)
-            all_examples.extend(examples)
-
-            processed_count += 1
-            if processed_count % 10000 == 0:
-                logger.info(
-                    f"처리 완료: {processed_count}/{len(enron_data)} ({processed_count / len(enron_data) * 100:.1f}%)")
-
-        logger.info(f"총 {len(all_examples)}개의 학습 예제를 생성했습니다.")
-
-        # 데이터가 너무 많으면 샘플링
-        if len(all_examples) > 50000:  # 최대 5만개로 제한
-            import random
-            random.seed(42)
-            all_examples = random.sample(all_examples, 50000)
-            logger.info(f"데이터 샘플링: {len(all_examples)}개 사용")
-
-        # 토큰화 함수 수정
-        def tokenize_function(example):
-            # 개별 예제 처리
-            tokenized = self.tokenizer(
-                example['text'],
-                truncation=True,
-                padding="max_length",  # 고정 길이로 패딩
-                max_length=self.config.max_length,
-                return_tensors=None,
-                add_special_tokens=False  # 이미 추가됨
-            )
-
-            # labels를 input_ids와 동일하게 설정
-            tokenized['labels'] = tokenized['input_ids'].copy()
-
-            # -100으로 패딩 토큰 마스킹 (loss 계산에서 제외)
-            tokenized['labels'] = [
-                token_id if token_id != self.tokenizer.pad_token_id else -100
-                for token_id in tokenized['labels']
-            ]
-
-            return tokenized
-
-        dataset = Dataset.from_list(all_examples)
-
-        # 개별 처리로 변경
-        logger.info("토큰화 진행 중...")
-        tokenized_dataset = dataset.map(
-            tokenize_function,
-            batched=False,
-            remove_columns=dataset.column_names,
-            num_proc=1  # 단일 프로세스로 안정성 확보
-        )
-
-        # 너무 짧은 시퀀스 필터링
-        def filter_function(example):
-            return len([x for x in example['input_ids'] if x != self.tokenizer.pad_token_id]) >= 10
-
-        tokenized_dataset = tokenized_dataset.filter(filter_function)
-        logger.info(f"필터링 후 데이터셋 크기: {len(tokenized_dataset)}")
-
-        return tokenized_dataset
-
-
-class PIILlamaTrainer:
-    """PII 데이터로 Llama-2 모델 파인튜닝"""
-
-    def __init__(self, config: PIIFineTuningConfig):
-        self.config = config
-        self.setup_model_and_tokenizer()
-
-    def setup_model_and_tokenizer(self):
-        """모델과 토크나이저 설정"""
-        logger.info(f"모델 로딩: {self.config.model_name}")
-
-        # 토크나이저 설정
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            self.config.model_name,
-            trust_remote_code=True
-        )
-
-        # 패딩 토큰 설정
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
-
-        # 모델 로드 (8bit 양자화 옵션)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.config.model_name,
-            torch_dtype=torch.float16,
-            device_map="auto",
-            load_in_8bit=True,  # 메모리 절약
-            trust_remote_code=True
-        )
-
-        # 모델의 패딩 토큰 설정
-        self.model.config.pad_token_id = self.tokenizer.pad_token_id
-
-        # LoRA 설정
-        if self.config.use_lora:
-            lora_config = LoraConfig(
-                task_type=TaskType.CAUSAL_LM,
-                r=self.config.lora_r,
-                lora_alpha=self.config.lora_alpha,
-                lora_dropout=self.config.lora_dropout,
-                target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
-                bias="none"
-            )
-            self.model = get_peft_model(self.model, lora_config)
-            self.model.print_trainable_parameters()
-
-    def train(self):
-        """모델 파인튜닝 실행"""
-        # 데이터 준비
-        data_processor = EnronPIIDataProcessor(self.config)
-        dataset = data_processor.create_dataset()
-
-        # 훈련/검증 분할
-        train_size = int(0.9 * len(dataset))
-        train_dataset = dataset.select(range(train_size))
-        eval_dataset = dataset.select(range(train_size, len(dataset)))
-
-        logger.info(f"훈련 데이터: {len(train_dataset)}, 검증 데이터: {len(eval_dataset)}")
-
-        # 간단한 데이터 콜레이터 사용
-
-        data_collator = default_data_collator
-
-        # 훈련 설정
-        training_args = TrainingArguments(
-            output_dir=self.config.output_dir,
-            overwrite_output_dir=True,
-            num_train_epochs=self.config.num_epochs,
-            per_device_train_batch_size=self.config.train_batch_size,
-            per_device_eval_batch_size=self.config.eval_batch_size,
-            gradient_accumulation_steps=self.config.gradient_accumulation_steps,
-            learning_rate=self.config.learning_rate,
-            warmup_steps=self.config.warmup_steps,
-            logging_steps=50,
-            save_steps=self.config.save_steps,
-            eval_steps=self.config.eval_steps,
-            eval_strategy="steps",
-            save_strategy="steps",
-            load_best_model_at_end=True,
-            metric_for_best_model="eval_loss",
-            greater_is_better=False,
-            fp16=True,
-            dataloader_pin_memory=False,
-            remove_unused_columns=False,
-            dataloader_drop_last=True,  # 불완전한 배치 제거
-            group_by_length=False,  # 길이 그룹화 비활성화 (오류 방지)
-            report_to=None,  # wandb 등 사용하려면 변경
-        )
-
-        # 트레이너 생성
-        trainer = Trainer(
-            model=self.model,
-            args=training_args,
-            train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
-            data_collator=data_collator,
-            tokenizer=self.tokenizer,
-        )
-
-        # 훈련 실행
-        logger.info("모델 훈련을 시작합니다...")
-        trainer.train()
-
-        # 모델 저장
-        trainer.save_model()
-        self.tokenizer.save_pretrained(self.config.output_dir)
-
-        logger.info(f"훈련 완료! 모델이 {self.config.output_dir}에 저장되었습니다.")
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Llama-2 PII Fine-tuning")
-    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-2-7b-chat-hf")
-    parser.add_argument("--enron_data_path", type=str, default="data/v6_enron_pii.jsonl")
-    parser.add_argument("--output_dir", type=str, default="./save/pii-llama2-ft")
-    parser.add_argument("--num_epochs", type=int, default=3)
-    parser.add_argument("--learning_rate", type=float, default=2e-4)
-    parser.add_argument("--batch_size", type=int, default=4)
-    parser.add_argument("--max_length", type=int, default=512)
-    parser.add_argument("--sample_ratio", type=float, default=0.1, help="데이터 샘플링 비율 (0.1 = 10%)")
-    parser.add_argument("--max_samples", type=int, default=10000, help="최대 학습 샘플 수")
-
-    args = parser.parse_args()
-
-    # 설정 생성
-    config = PIIFineTuningConfig(
-        model_name=args.model_name,
-        enron_data_path=args.enron_data_path,
-        output_dir=args.output_dir,
-        num_epochs=args.num_epochs,
-        learning_rate=args.learning_rate,
-        train_batch_size=args.batch_size,
-        max_length=args.max_length,
-        sample_ratio=args.sample_ratio,
-        max_samples=args.max_samples
+print("샘플링")
+raw_ds = raw_ds.shuffle(seed=suffle_seed)  # 전체를 무작위 섞은 뒤
+raw_ds = raw_ds.select(range(SAMPLE_SIZE))  # 앞에서 pick
+
+# JSONL 파일로 저장
+raw_ds.to_json(SAMPLE_OUTPUT_PATH, orient="records", lines=True, force_ascii=False)
+print(f"샘플링된 데이터가 {SAMPLE_OUTPUT_PATH} 로 저장되었습니다.")
+
+print("데이터 변환")
+# 단일 text 생성
+raw_ds = raw_ds.map(merge_fields, remove_columns=raw_ds.column_names)
+tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-chat-hf")
+tokenizer.pad_token = tokenizer.eos_token  # Llama-2는 eos(</s>)를 pad로 재사용
+
+tokenized = raw_ds.map(tokenize, batched=True, remove_columns=["text"])
+
+# 토크나이즈 & 2048-토큰 블록화
+# 이메일 길이가 제각각이므로 토큰을 쭉 연결한 뒤 2 048개씩 잘라서 학습 효율 ↑
+block_size = 2048
+
+lm_ds = tokenized.map(group_texts, batched=True, batch_size=1000, remove_columns=tokenized.column_names)
+
+# Lora Setting
+bnb_cfg = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.float16,
+    bnb_4bit_use_double_quant=True
+)
+
+model = AutoModelForCausalLM.from_pretrained(
+    "meta-llama/Llama-2-7b-chat-hf",
+    quantization_config=bnb_cfg,
+    device_map="auto"
+)
+
+lora_cfg = LoraConfig(
+    r=16,
+    lora_alpha=32,
+    lora_dropout=0.05,
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj"],
+    bias="none",
+    task_type="CAUSAL_LM"
+)
+model = get_peft_model(model, lora_cfg)
+
+training_args = TrainingArguments(
+    output_dir=SAVE_PATH,
+    per_device_train_batch_size=4,  # A100 80 GB 기준; GPU 여유에 맞춰 조정
+    gradient_accumulation_steps=8,
+    num_train_epochs=1,  # 이메일 전체를 여러 epoch 돌리면 과도한 memorisation 위험↑
+    learning_rate=2e-4,
+    fp16=True,
+    logging_steps=25,
+    save_strategy="epoch"
+)
+
+collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+
+
+def clm_collator(features):
+    pad_collator = DataCollatorWithPadding(
+        tokenizer, pad_to_multiple_of=8  # TensorCore 최적화 (선택)
     )
+    batch = pad_collator(features)
+    # labels = input_ids  복사
+    batch["labels"] = batch["input_ids"].clone()
+    # pad( attention_mask == 0 ) → ignore_index(-100)
+    batch["labels"][batch["attention_mask"] == 0] = -100
+    return batch
 
-    # 출력 디렉터리 생성
-    os.makedirs(config.output_dir, exist_ok=True)
-
-    # 훈련 실행
-    trainer = PIILlamaTrainer(config)
-    trainer.train()
-
-
-if __name__ == "__main__":
-    main()
-
-"""
-# 10% 데이터로 빠른 테스트
-python w00/pii_finetuning.py \
-    --sample_ratio 0.1 \
-    --max_samples 5000 \
-    --batch_size 2 \
-    --num_epochs 1 \
-    --max_length 256
-
-# 전체 데이터 훈련 (시간이 오래 걸림)
-python w00/pii_finetuning.py \
-    --sample_ratio 1.0 \
-    --max_samples 50000 \
-    --batch_size 4 \
-    --num_epochs 3
-"""
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=lm_ds,
+    data_collator=collator
+)
+trainer.train()
+trainer.save_model(f"{SAVE_PATH}/latest")
