@@ -160,3 +160,14 @@ class SFTTrainer(object):
         wandb.finish()
 
 
+"""
+python main.py \
+--mode sft \
+--lr 3e-5 \
+--train_steps 100 \
+--grad_acc_steps 32 \
+--batch_size 1024 \
+--prompt_file ./prompts/alpaca_pii.jsonl \
+--few_shot_file ./prompts/sft_dataset_pii.json \
+--exp_name gpt2-sft-pii-v1
+"""
