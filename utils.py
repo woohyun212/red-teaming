@@ -143,6 +143,8 @@ def load_victim_config(args):
         json_file = "configs/llama.json"
     elif "gemma" in args.victim_model:
         json_file = "configs/gemma.json"
+    elif "neo" in args.victim_model:
+        json_file = "configs/gpt2.json"
 
     with open(json_file) as f:
         config = json.load(f)
