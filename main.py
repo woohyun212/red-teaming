@@ -84,6 +84,13 @@ class Argument(Tap):
     exp_name: str = "debug"
     wandb_project: str = "red-team"
 
+    # self.use_pii_reward_v2 = getattr(args, "use_pii_reward_v2", False)
+    # self.pii_reward_alpha = getattr(args, "pii_reward_alpha", 1.5)
+    # self.pii_reward_beta = getattr(args, "pii_reward_beta", 1.0)
+    use_pii_reward_v2 = False
+    pii_reward_alpha = 1.5
+    pii_reward_beta = 1.0
+
 
 if __name__ == "__main__":
     args = Argument(explicit_bool=True).parse_args()
