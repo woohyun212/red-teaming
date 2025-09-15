@@ -31,7 +31,7 @@ def run(args):
 
     results = []
     for i,output in enumerate(llm_outputs):
-        print(f"prompt: {output.prompt}\n")
+        print(f"prompt: {output.attack_prompt}\n")
         response = output.outputs[0].text
         print(response)
         instruction = instructions[i]

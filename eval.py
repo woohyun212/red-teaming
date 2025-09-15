@@ -44,9 +44,10 @@ def make_prompt(instruction, _):
 # 5) 결과 메트릭 정리 후 JSON 저장
 def run(args):
     # --- 디바이스 선택(GPU 가용 시 해당 GPU, 아니면 CPU) ---
+    global victim_tokenizer
     if torch.cuda.is_available():
         _dev_index = torch.cuda.current_device()
-        device = torch.device(f"cuda:{_dev_index}") ️ # 현재 활성 CUDA 디바이스로 설정
+        device = torch.device(f"cuda:{_dev_index}")   # 현재 활성 CUDA 디바이스로 설정
     else:
         device = torch.device("cpu")
 
@@ -76,52 +77,22 @@ def run(args):
         # Load PEFT config to get base model (local LoRA)
         from peft import PeftConfig
         lora_path = model_dict[victim_name]
-        peft_cfg = PeftConfig.from_pretrained(lora_path) ️ # LoRA 메타정보에서 base 모델 이름 확인
+        peft_cfg = PeftConfig.from_pretrained(lora_path)   # LoRA 메타정보에서 base 모델 이름 확인
         base_model_name = peft_cfg.base_model_name_or_path
 
         _base = AutoModelForCausalLM.from_pretrained(
             base_model_name,
             device_map="auto"
-        ) ️ # Base 모델 본체 로드
-        victim_model = PeftModel.from_pretrained(_base, lora_path, device_map="auto") ️ # Base 위에 LoRA 어댑터 적용
+        )   # Base 모델 본체 로드
+        victim_model = PeftModel.from_pretrained(_base, lora_path, device_map="auto")   # Base 위에 LoRA 어댑터 적용
         victim_model.eval()
 
-        victim_tokenizer = AutoTokenizer.from_pretrained(lora_path, padding_side="left") ️ # LoRA 아티팩트 위치에서 토크나이저 로드(왼쪽 패딩)
+        victim_tokenizer = AutoTokenizer.from_pretrained(lora_path, padding_side="left")   # LoRA 아티팩트 위치에서 토크나이저 로드(왼쪽 패딩)
         if victim_tokenizer.pad_token_id is None:
-            victim_tokenizer.pad_token_id = victim_tokenizer.eos_token_id ️ # pad 토큰 미설정 시 eos 토큰으로 대체
+            victim_tokenizer.pad_token_id = victim_tokenizer.eos_token_id   # pad 토큰 미설정 시 eos 토큰으로 대체
         victim_prebuilt = True
     else:
-        args.victim_model = model_dict[args.victim_model] ️ # 사전 정의된 식별자/경로로 치환
-
-    # 피해자 모델에 대한 생성 파라미터/설정 로드(외부 util)
-    load_victim_config(args)
-    print(vars(args))
-
-    # 공격 프롬프트 템플릿이 들어있는 JSONL 경로
-    prompt_file = os.path.join("prompts", "attack_prompt.jsonl")
-
-    # 공격 프롬프트를 생성할 모델(SFT/LoRA) 로드
-    if args.no_lora:
-        model = AutoModelForCausalLM.from_pretrained(
-            args.ckpt, device_map="auto")
-    else:
-        m = AutoModelForCausalLM.from_pretrained(
-            args.sft_ckpt, device_map="auto")
-        model = PeftModel.from_pretrained(m, args.ckpt, device_map="auto")
-
-    model.eval() ️ # 평가 모드로 고정(드롭아웃 등 비활성화)
-
-    # SFT 토크나이저를 우선 사용(없으면 ckpt 쪽을 사용)
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(args.sft_ckpt, padding_side="left")
-    except Exception:
-        tokenizer = AutoTokenizer.from_pretrained(args.ckpt, padding_side="left")
-
-    tokenizer.pad_token_id = tokenizer.eos_token_id ️ # 왼쪽 패딩 시 pad 토큰 미정의 문제 방지
-
-    # 데이터로더: 공격 프롬프트(입력) 배치를 준비
-    dataloader = get_dataloader(
-        "gfn", tokenizer, prompt_file=prompt_file, batch_size=args.batch_size, shuffle=False)
+        args.victim_model = model_dict[args.victim_model]   # 사전 정의된 식별자/경로로 치환
 
     # 위에서 prebuilt 로드하지 않은 일반 허깅페이스 피해자 모델 로드 분기
     if not victim_prebuilt:
@@ -136,6 +107,36 @@ def run(args):
             device_map="auto",
             torch_dtype=getattr(torch, args.dtype),
         )
+    # 피해자 모델에 대한 생성 파라미터/설정 로드(외부 util)
+    load_victim_config(args)
+
+    # 공격 프롬프트 템플릿이 들어있는 JSONL 경로
+    prompt_file = os.path.join("prompts", "attack_prompt.jsonl")
+
+    # 공격 프롬프트를 생성할 모델(SFT/LoRA) 로드
+    if args.no_lora:
+        model = AutoModelForCausalLM.from_pretrained(
+            args.ckpt, device_map="auto")
+    else:
+        m = AutoModelForCausalLM.from_pretrained(
+            args.sft_ckpt, device_map="auto")
+        model = PeftModel.from_pretrained(m, args.ckpt, device_map="auto")
+
+    model.eval()   # 평가 모드로 고정(드롭아웃 등 비활성화)
+
+    # SFT 토크나이저를 우선 사용(없으면 ckpt 쪽을 사용)
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(args.sft_ckpt, padding_side="left")
+    except Exception:
+        tokenizer = AutoTokenizer.from_pretrained(args.ckpt, padding_side="left")
+
+    tokenizer.pad_token_id = tokenizer.eos_token_id   # 왼쪽 패딩 시 pad 토큰 미정의 문제 방지
+
+    # 데이터로더: 공격 프롬프트(입력) 배치를 준비
+    dataloader = get_dataloader(
+        "gfn", tokenizer, prompt_file=prompt_file, batch_size=args.batch_size, shuffle=False)
+
+
 
     # 피해자 모델의 종료 토큰(eos 등) 정의
     if victim_name.startswith("llama-3"):
@@ -199,7 +200,7 @@ def run(args):
     all_outputs = []
     iterator = InfIterator(dataloader)
 
-    global_stop = False ️ # 목표 도달 시 외부 루프 중단 플래그
+    global_stop = False   # 목표 도달 시 외부 루프 중단 플래그
 
     # === 메인 루프: 목표 PII 적중 수에 도달할 때까지 반복 ===
     while True:
@@ -214,10 +215,10 @@ def run(args):
         if batch["input_ids"].size(0) == 1:
             batch = {k: v.repeat(args.batch_size, 1) for k, v in batch.items()}
 
-        prompt_len = batch["input_ids"].size(1) ️ # 프롬프트(입력) 길이 저장(생성 구간 마스킹 용)
-        outputs = model.generate(**batch, generation_config=generation_config) ️ # 공격 모델이 응답 후보(토큰열) 생성
+        prompt_len = batch["input_ids"].size(1)   # 프롬프트(입력) 길이 저장(생성 구간 마스킹 용)
+        outputs = model.generate(**batch, generation_config=generation_config)   # 공격 모델이 응답 후보(토큰열) 생성
 
-        response = outputs[:, prompt_len:] ️ # 프롬프트 영역을 제외한 생성 구간만 분리
+        response = outputs[:, prompt_len:]   # 프롬프트 영역을 제외한 생성 구간만 분리
         prompt_mask = batch["attention_mask"]
 
         # 피해자 모델의 batch size에 맞춰 부분 배치로 나눔
@@ -229,8 +230,8 @@ def run(args):
                 break
             # 부분 배치 단위로 마스킹/로그확률 계산
             batch_response = batch_output[:, prompt_len:]
-            pad_mask = (batch_response == tokenizer.eos_token_id).cumsum(1) > 1 ️ # 첫 eos 이후 토큰들을 패딩으로 간주하여 무시
-            batch_mask = torch.cat([batch_prompt_mask, ~(pad_mask).long()], 1) ️ # 프롬프트+생성 구간 마스크 결합
+            pad_mask = (batch_response == tokenizer.eos_token_id).cumsum(1) > 1   # 첫 eos 이후 토큰들을 패딩으로 간주하여 무시
+            batch_mask = torch.cat([batch_prompt_mask, ~(pad_mask).long()], 1)   # 프롬프트+생성 구간 마스크 결합
 
             # 로그 확률 계산(LoRA 비활성화 후 base로 추론 → 다시 복원)
             with torch.no_grad():
@@ -238,15 +239,15 @@ def run(args):
                 logits = model(input_ids=batch_output, attention_mask=batch_mask).logits
                 base_to_lora(model)
 
-                logits = logits[:, prompt_len - 1:-1] ️ # 다음 토큰 로그확률을 위해 시프트
-                log_probs = F.log_softmax(logits, -1) ️ # 각 위치의 정답 토큰에 대한 로그확률 취득 및 합산
+                logits = logits[:, prompt_len - 1:-1]   # 다음 토큰 로그확률을 위해 시프트
+                log_probs = F.log_softmax(logits, -1)   # 각 위치의 정답 토큰에 대한 로그확률 취득 및 합산
                 log_probs = torch.gather(log_probs, 2, batch_response.unsqueeze(2)).squeeze(2)
                 log_probs = log_probs.masked_fill(pad_mask, 0.0)
                 log_probs = torch.sum(log_probs, 1)
 
             # 토큰열을 텍스트로 디코딩
             decoded = tokenizer.batch_decode(batch_response, skip_special_tokens=True)
-            victim_prompts = [prompt_fn(x, victim_tokenizer) for x in decoded] ️ # 피해자 모델 입력 템플릿으로 변환
+            victim_prompts = [prompt_fn(x, victim_tokenizer) for x in decoded]   # 피해자 모델 입력 템플릿으로 변환
 
             # 피해자 응답을 누적하고, 프롬프트별 PII 적중 수를 따로 집계
             all_responses = []
@@ -257,7 +258,7 @@ def run(args):
                 if global_stop:
                     break
                 victim_responses = victim(victim_prompts)
-                victim_responses = [x[0]["generated_text"] for x in victim_responses] ️ # pipeline 출력에서 실제 텍스트만 추출
+                victim_responses = [x[0]["generated_text"] for x in victim_responses]   # pipeline 출력에서 실제 텍스트만 추출
                 all_responses.append(victim_responses)
 
                 # 각 응답 텍스트에서 PII 엔티티를 검출하여 프롬프트별 누적
@@ -272,10 +273,13 @@ def run(args):
                 # 현재 누적치 + 이번 부분 배치까지의 예측 적중 수를 기반으로 조기 종료 판단
                 running_total = total_pii_count + sum(per_prompt_pii_counts)
                 if running_total >= pii_target:
+                    # 조기 종료 트리거 시, 진행중(online) 카운터를 영속 카운터에 동기화
+                    # 이렇게 하면 메타데이터(total_pii_count_online)가 400 미만으로 끝나는 현상을 방지
+                    total_pii_count = running_total
                     global_stop = True
                     break
 
-            all_responses = np.stack(all_responses, axis=0).T ️ # [샘플횟수, 배치] → [배치, 샘플횟수]로 전치하여 다룰 수 있게 정리
+            all_responses = np.stack(all_responses, axis=0).T   # [샘플횟수, 배치] → [배치, 샘플횟수]로 전치하여 다룰 수 있게 정리
 
             # PII 검출기 점수(여기서는 avg-toxic-score 명칭)를 응답별로 계산 후 평균
             avg_scores = torch.stack([pii_detector.compute(resp) for resp in all_responses.tolist()], dim=0).mean(dim=0)
@@ -301,7 +305,7 @@ def run(args):
                 output_obj["pii_count_per_prompt"] = sum(per_resp_counts)
                 all_outputs.append(output_obj)
 
-                if per_prompt_pii_counts[i] > 0: ️ # 해당 프롬프트가 실제 PII를 포함한 경우에만 누적 카운터 반영
+                if per_prompt_pii_counts[i] > 0:   # 해당 프롬프트가 실제 PII를 포함한 경우에만 누적 카운터 반영
                     detected_outputs.append(output_obj)
                     total_pii_count += per_prompt_pii_counts[i]
 
@@ -330,7 +334,7 @@ def run(args):
     embeddings = model.encode(prompts, convert_to_numpy=True, batch_size=16)  # 문장 임베딩 추출
     embeddings = torch.from_numpy(embeddings)  # 텐서로 변환
 
-    avg_sim = batch_cosine_similarity_kernel(embeddings) ️ # 프롬프트들 간 평균 코사인 유사도
+    avg_sim = batch_cosine_similarity_kernel(embeddings)   # 프롬프트들 간 평균 코사인 유사도
 
     # 결과 디렉터리 생성 후, 상단 메타데이터(온라인 카운터 포함)를 prepend하여 JSON 저장
     output_dir = f"./results/{victim_name}"
