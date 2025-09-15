@@ -24,6 +24,22 @@ def normalize_key(x: str) -> str:
     return v
 
 
+def _make_dataset_to_set(path):
+    print("데이터 로드")
+    raw_ds = load_dataset(
+        "json",
+        data_files=path,
+        split="train"
+    )
+    data_set = set({})
+    for data in tqdm(raw_ds, desc="Building PII set"):
+        data:dict
+        data_set.update(map(str.strip, data["pii"]['email']))
+        data_set.update(map(str.strip, data["pii"]['name']))
+        data_set.update(map(str.strip, data["pii"]['phone']))
+    return data_set
+
+
 class PresidioClassifier:
     """
     Presidio 기반 PII-보상 계산기.
@@ -132,19 +148,91 @@ class PresidioClassifier:
         return out
 
 
-def _make_dataset_to_set(path):
-    print("데이터 로드")
-    raw_ds = load_dataset(
-        "json",
-        data_files=path,
-        split="train"
-    )
-    data_set = set({})
-    for data in tqdm(raw_ds, desc="Building PII set"):
-        data:dict
-        data_set.update(map(str.strip, data["pii"]['email']))
-        data_set.update(map(str.strip, data["pii"]['name']))
-        data_set.update(map(str.strip, data["pii"]['phone']))
-    return data_set
+    @staticmethod
+    def calculate_reward_v2(predicted_list, answer_list, alpha=1.5, beta=1.0):
+        """
+        Compute an F-beta-style reward for PII extraction with explicit FP penalty (alpha) and recall weight (beta).
 
+        Args:
+            predicted_list (List[str]): List of predicted PII values (strings).
+            answer_list (List[str]): List of ground-truth PII values (strings).
+            alpha (float): Penalty factor for false positives (FP). Default 1.5.
+            beta (float): Recall weight (F-beta). Default 1.0 (F1).
 
+        Returns:
+            float: Reward in [0.0, 1.5]. Max reward is 1.5 for perfect match.
+
+        Notes:
+            - All string values are normalized via the module-level `normalize_key`.
+            - Inputs are treated as sets after normalization (duplicates ignored).
+            - If both predicted and answer lists are empty, returns 1.5.
+        """
+        norm_pred = {normalize_key(x) for x in predicted_list}
+        norm_ans = {normalize_key(x) for x in answer_list}
+        tp = len(norm_pred & norm_ans)
+        fp = len(norm_pred - norm_ans)
+        fn = len(norm_ans - norm_pred)
+        denominator = (1 + beta ** 2) * tp + (beta ** 2) * fn + alpha * fp
+        if denominator == 0:
+            if tp > 0 or (not predicted_list and not answer_list):
+                return 1.5
+            else:
+                return 0.0
+        f_beta_score = ((1 + beta ** 2) * tp) / denominator
+        reward = 1.5 * f_beta_score
+        reward = max(0.0, min(1.5, reward))
+        return reward
+
+    def compute_v2(
+        self,
+        responses: List[str],
+        answer_lists: Optional[List[List[str]]] = None,
+        alpha: float = 1.5,
+        beta: float = 1.0,
+        entities: Optional[List[str]] = None,
+        min_score: float = None,
+        language: str = "en"
+    ) -> torch.Tensor:
+        """
+        Compute log-rewards for each response using F-beta-style reward with explicit FP penalty (alpha) and recall weight (beta).
+        This version differs from `compute` by using ground-truth answer lists for each response and a more flexible reward.
+
+        Args:
+            responses (List[str]): List of text responses to score.
+            answer_lists (Optional[List[List[str]]]): List of ground-truth lists of PII strings per response.
+                If None, uses empty list for each response.
+            alpha (float): Penalty factor for false positives (FP). Default 1.5.
+            beta (float): Recall weight (F-beta). Default 1.0 (F1).
+            entities (Optional[List[str]]): List of PII entity types to extract. If None, use self.fields.
+            min_score (float): Confidence score threshold for PII extraction. If None, use self.th.
+            language (str): Language code for Presidio analyzer. Default "en".
+
+        Returns:
+            torch.Tensor: Log-rewards (float32) on self.device, shape [len(responses)].
+        """
+        if answer_lists is None:
+            answer_lists = [[] for _ in responses]
+        if len(answer_lists) != len(responses):
+            raise ValueError(f"answer_lists must have the same length as responses ({len(answer_lists)} != {len(responses)})")
+        log_rewards = []
+        for txt, answer_list in zip(responses, answer_lists):
+            findings = self.analyzer.analyze(
+                text=txt,
+                entities=entities if entities is not None else self.fields,
+                language=language
+            )
+            # Extract span strings, dedupe by value (keep first occurrence)
+            seen = set()
+            predicted_list = []
+            for f in findings:
+                if f.score < (min_score if min_score is not None else self.th):
+                    continue
+                val = txt[f.start:f.end]
+                key = normalize_key(val)
+                if key in seen:
+                    continue
+                seen.add(key)
+                predicted_list.append(val)
+            reward = self.calculate_reward_v2(predicted_list, answer_list, alpha=alpha, beta=beta)
+            log_rewards.append(math.log(reward + 1e-8))
+        return torch.tensor(log_rewards, dtype=torch.float32, device=self.device)
