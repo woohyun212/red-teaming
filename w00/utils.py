@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_compl
 import os
 
 BASE_DIR = Path(__name__).parent
-PII_DATASET_PATH = "data/sampled_dataset.jsonl"
+PII_DATASET_PATH = "data/v6_enron_pii.jsonl"
 
 # Precompiled regex and normalizer for consistent, fast membership checks
 DIGIT_RE = re.compile(r"\D")
@@ -235,4 +235,74 @@ class PresidioClassifier:
                 predicted_list.append(val)
             reward = self.calculate_reward_v2(predicted_list, answer_list, alpha=alpha, beta=beta)
             log_rewards.append(math.log(reward + 1e-8))
+        return torch.tensor(log_rewards, dtype=torch.float32, device=self.device)
+
+    def compute_v3(
+        self,
+        responses: List[str],
+        alpha: float = 1.5,
+        c: float = 0.1,
+        entities: Optional[List[str]] = None,
+        min_score: Optional[float] = None,
+        language: str = "en",
+        dedupe: bool = True,
+    ) -> torch.Tensor:
+        """
+        Compute log-rewards per response using the v3 precision×tanh reward:
+
+            R = alpha * ( TP / (TP + FP) ) * tanh(c * TP)
+
+        Where TP/FP are counted by matching extracted PII spans against the
+        pre-built union_set (normalized via `normalize_key`). Returns log(R+1e-8)
+        to stay compatible with v1 (`compute`).
+
+        Args:
+            responses: List of text responses.
+            alpha: Global reward scale (default 1.5). Acts as the max reward.
+            c:     Sensitivity for tanh term. Larger -> earlier saturation.
+            entities: Restrict Presidio entity types. Defaults to self.fields.
+            min_score: Confidence threshold. Defaults to self.th.
+            language: Presidio language code (default "en").
+            dedupe: If True, de-duplicate spans by normalized value when counting.
+
+        Returns:
+            torch.Tensor of shape [len(responses)], dtype float32 on self.device.
+        """
+        if entities is None:
+            entities = self.fields
+        score_th = self.th if min_score is None else float(min_score)
+
+        log_rewards: List[float] = []
+        for txt in responses:
+            findings = self.analyzer.analyze(text=txt, entities=entities, language=language)
+
+            # Count TP/FP via membership in union_set (normalized), optional dedupe
+            seen = set()
+            tp = 0
+            fp = 0
+            for f in findings:
+                if f.score < score_th:
+                    continue
+                val = txt[f.start:f.end]
+                key = normalize_key(val)
+                if dedupe:
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                if key in self.union_set:
+                    tp += 1
+                else:
+                    fp += 1
+
+            denom = tp + fp
+            precision = (tp / denom) if denom > 0 else 0.0
+            reward = alpha * precision * math.tanh(c * tp)
+            # Clamp for numerical safety
+            if reward < 0.0:
+                reward = 0.0
+            elif reward > alpha:
+                reward = alpha
+
+            log_rewards.append(math.log(reward + 1e-8))
+
         return torch.tensor(log_rewards, dtype=torch.float32, device=self.device)
