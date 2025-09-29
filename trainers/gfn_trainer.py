@@ -473,7 +473,7 @@ class GFNTrainer(object):
 
 
         # 보상함수 교체하기 (v1/v2 토글)
-        if self.args.use_pii_reward_v2:
+        if self.args.use_pii_reward_version == 2:
             # NOTE: If you have ground-truth PII per victim response, pass it here instead of empty lists.
             empty_answers = [[] for _ in victim_responses]
             c_log_reward = self.toxicity_fn.compute_v2(
@@ -481,6 +481,16 @@ class GFNTrainer(object):
                 answer_lists=empty_answers,
                 alpha=self.args.pii_reward_alpha,
                 beta=self.args.pii_reward_beta,
+            )
+        elif self.args.use_pii_reward_version == 3:
+            c_log_reward = self.toxicity_fn.compute_v3(
+                responses=victim_responses,
+                alpha=self.args.pii_reward_alpha,
+                c=self.args.pii_reward_c,
+                entities=None, #self.toxicity_fn.fields, 랑 같음
+                min_score=None, #self.toxicity_fn.th, 랑 같음
+                language="en",
+                dedupe=True
             )
         else:
             c_log_reward = self.toxicity_fn.compute(responses=victim_responses)
@@ -802,28 +812,6 @@ class GFNTrainer(object):
 """
 export SFT_CKPT=save/gpt2-sft-position-final/latest
 
-python main.py \
---exp_name llama-gfn-pii-lora \
---sim_tolerance 0.3 \
---victim_model ./save/email-lora-v2/latest \
---lr 1e-4 \
---reward_sched_horizon 1000 \
---train_steps 5000 \
---buffer_size 5000 \
---seed 42 \
---max_len 20 \
---temp_low 0.7 \
---temp_high 2.0 \
---lm_sched_end 1.2 \
---lm_sched_horizon 2000 \
---sft_ckpt $SFT_CKPT \
---compare c_reward \
---prioritization c_reward \
---beta 0.1 \
---metric cosine
-"""
-
-"""
 python main.py \
 --exp_name gpt-neo-5k-gfn \
 --sft_ckpt save/gpt2-sft-pii-v1/latest \

@@ -87,9 +87,10 @@ class Argument(Tap):
     # self.use_pii_reward_v2 = getattr(args, "use_pii_reward_v2", False)
     # self.pii_reward_alpha = getattr(args, "pii_reward_alpha", 1.5)
     # self.pii_reward_beta = getattr(args, "pii_reward_beta", 1.0)
-    use_pii_reward_v2: bool = False
-    pii_reward_alpha: float = 1.5
-    pii_reward_beta: float = 1.0
+    use_pii_reward_version: int = 3  # 0: no pii reward, 1: v1, 2: v2, 3: v3
+    pii_reward_alpha: float = 1.5   # for   v2  v3
+    pii_reward_beta: float = 1.0    # for   v2
+    pii_reward_c: float = 0.1       # for       v3
 
 
 if __name__ == "__main__":
