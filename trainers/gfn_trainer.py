@@ -177,38 +177,39 @@ class GFNTrainer(object):
 
         # victim tokenizer 및 model 불러오기
         if os.path.isdir(args.victim_model):
-            # ✅ 로컬 디렉토리로부터 transformers pipeline 방식으로 로딩
             print(f"[INFO] Using local victim model from directory: {args.victim_model}")
 
+            # ✅ Base model: GPT‑Neo 1.3B
+            base_model_id = "EleutherAI/gpt-neo-1.3B"
+
+            # Tokenizer from base (GPT‑Neo)
             self.victim_model_tokenizer = AutoTokenizer.from_pretrained(
-                args.victim_model, padding_side="left"
+                base_model_id, padding_side="left"
             )
             if self.victim_model_tokenizer.pad_token_id is None:
                 self.victim_model_tokenizer.pad_token_id = self.victim_model_tokenizer.eos_token_id
 
-            # 2) 기본 Llama-2-7b 모델 로드
+            # Load base model and apply local LoRA adapter (args.victim_model)
             base_model = AutoModelForCausalLM.from_pretrained(
-                "meta-llama/Llama-2-7b-chat-hf",
+                base_model_id,
                 torch_dtype=getattr(torch, args.dtype),
-                device_map="auto"
+                device_map="auto",
             )
 
-            # 3) LoRA adapter(=args.victim_model 디렉토리) 적용
             model = PeftModelForCausalLM.from_pretrained(
                 base_model,
                 args.victim_model,
                 ignore_mismatched_sizes=True,
-                device_map="auto"
-            )
-            # 4) 토크나이저 vocab 크기에 맞춰 임베딩 재조정
-            model.resize_token_embeddings(
-                self.victim_model_tokenizer.vocab_size
+                device_map="auto",
             )
 
-            # Add victim_bs logic before pipeline
+            # Ensure embedding size matches tokenizer
+            model.resize_token_embeddings(self.victim_model_tokenizer.vocab_size)
+
+            # Batch size for victim pipeline
             victim_bs = getattr(self.args, "victim_batch_size", self.args.batch_size)
 
-            # 5) pipeline으로 감싸기
+            # Wrap with transformers pipeline
             self.victim_model = pipeline(
                 model=model,
                 tokenizer=self.victim_model_tokenizer,
@@ -221,7 +222,7 @@ class GFNTrainer(object):
                 top_p=args.victim_top_p,
                 pad_token_id=self.victim_model_tokenizer.pad_token_id,
                 eos_token_id=self.victim_model_tokenizer.eos_token_id,
-                do_sample=True
+                do_sample=True,
             )
 
             self.use_vllm = False  # 분기 처리를 위한 플래그
@@ -229,8 +230,6 @@ class GFNTrainer(object):
         else:
             # ✅ Hugging Face hub 모델이면 기존 vLLM 방식 사용
             self.use_vllm = True  # 분기 처리를 위한 플래그
-
-
 
             self.victim_model = LLM(
                 args.victim_model, dtype=args.dtype, gpu_memory_utilization=args.gpu_memory_utilization)
@@ -813,8 +812,9 @@ class GFNTrainer(object):
 export SFT_CKPT=save/gpt2-sft-position-final/latest
 
 python main.py \
---exp_name gpt-neo-5k-gfn \
---sft_ckpt save/gpt2-sft-pii-v1/latest \
+--exp_name gfn-neo-5k-r_v3-1 \
+--sft_ckpt save/gpt2-sft-position-final/latest \
+--use_pii_reward_version 3
 --sim_tolerance 0.25 \
 --victim_model ./save/gpt-neo-enron-e4-5k \
 --lr 1e-4 \
