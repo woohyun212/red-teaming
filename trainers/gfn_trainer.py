@@ -234,8 +234,6 @@ class GFNTrainer(object):
             self.victim_model = LLM(
                 args.victim_model, dtype=args.dtype, gpu_memory_utilization=args.gpu_memory_utilization)
 
-            self.victim_model = AutoModelForCausalLM.from_pretrained(args.victim_model, padding_side="left")
-
             self.victim_model_tokenizer = AutoTokenizer.from_pretrained(
                 args.victim_model, padding_side="left")
 
@@ -460,15 +458,41 @@ class GFNTrainer(object):
 
         victim_prompts = [self.prompt_fn(x) for x in decoded_responses]
 
-        llm_outputs = self.victim_model.generate(
-            victim_prompts, self.sampling_params, use_tqdm=False)
         attack_prompts = []
         victim_responses = []
-        for i, output in enumerate(llm_outputs):
-            # for each prompt we get multiple response
-            for response in output.outputs:
-                victim_responses.append(response.text)
-                attack_prompts.append(decoded_responses[i])
+        if self.use_vllm:
+            # vLLM path
+            llm_outputs = self.victim_model.generate(
+                victim_prompts, self.sampling_params, use_tqdm=False
+            )
+            for i, output in enumerate(llm_outputs):
+                # for each prompt we get multiple response
+                for response in output.outputs:
+                    victim_responses.append(response.text)
+                    attack_prompts.append(decoded_responses[i])
+        else:
+            # transformers pipeline path
+            num = self.args.num_r_samples
+            pipe_out = self.victim_model(
+                victim_prompts,
+                num_return_sequences=num,
+                do_sample=True,
+                max_new_tokens=self.args.victim_max_len,
+                temperature=self.args.victim_temp,
+                top_p=self.args.victim_top_p,
+                pad_token_id=self.victim_model_tokenizer.pad_token_id,
+                eos_token_id=self.victim_model_tokenizer.eos_token_id,
+                return_full_text=False,
+            )
+            # `pipeline` returns a flat list of length len(victim_prompts) * num
+            # with blocks of `num` items per input prompt, each item is a dict with 'generated_text'.
+            for i, _ in enumerate(victim_prompts):
+                start = i * num
+                end = start + num
+                for item in pipe_out[start:end]:
+                    text = item["generated_text"] if isinstance(item, dict) else str(item)
+                    victim_responses.append(text)
+                    attack_prompts.append(decoded_responses[i])
 
 
         # 보상함수 교체하기 (v1/v2 토글)
