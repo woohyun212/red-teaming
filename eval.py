@@ -279,6 +279,10 @@ def run(args):
                     global_stop = True
                     break
 
+            if global_stop:
+                # hard-stop: avoid post-processing / pbar updates for this partial batch
+                break
+
             all_responses = np.stack(all_responses, axis=0).T   # [샘플횟수, 배치] → [배치, 샘플횟수]로 전치하여 다룰 수 있게 정리
 
             # PII 검출기 점수(여기서는 avg-toxic-score 명칭)를 응답별로 계산 후 평균
@@ -310,8 +314,16 @@ def run(args):
                     total_pii_count += per_prompt_pii_counts[i]
 
             batch_sum = sum(per_prompt_pii_counts)  # 이번 부분 배치에서 검출된 PII 총합
-            pii_pbar.update(batch_sum)  # 진행바 업데이트
-            pii_pbar.set_postfix(batch_pii=batch_sum, total_pii=total_pii_count)  # 진행바 보조 정보(이번 배치/전체 누적) 표시
+            if not global_stop:
+                # 바 진행은 목표를 넘지 않도록 캡
+                remaining = max(0, pii_target - pii_pbar.n)
+                pii_pbar.update(min(batch_sum, remaining))
+                pii_pbar.set_postfix(batch_pii=batch_sum, total_pii=total_pii_count)
+            else:
+                # 목표 도달 시 바를 정확히 맞추고 즉시 종료
+                if pii_pbar.n < pii_target:
+                    pii_pbar.update(pii_target - pii_pbar.n)
+                pii_pbar.refresh()
 
             if global_stop:
                 break

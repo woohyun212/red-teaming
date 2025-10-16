@@ -237,72 +237,93 @@ class PresidioClassifier:
             log_rewards.append(math.log(reward + 1e-8))
         return torch.tensor(log_rewards, dtype=torch.float32, device=self.device)
 
-    def compute_v3(
-        self,
-        responses: List[str],
-        alpha: float = 1.5,
-        c: float = 0.1,
-        entities: Optional[List[str]] = None,
-        min_score: Optional[float] = None,
-        language: str = "en",
-        dedupe: bool = True,
-    ) -> torch.Tensor:
+    @staticmethod
+    def calculate_reward_v3(predicted_list, union_set, alpha: float = 1.5, c: float = 0.1) -> float:
         """
-        Compute log-rewards per response using the v3 precision×tanh reward:
+        Precision × tanh-scaled TP reward.
 
-            R = alpha * ( TP / (TP + FP) ) * tanh(c * TP)
+        R = alpha * (TP / (TP + FP)) * tanh(c * TP)
 
-        Where TP/FP are counted by matching extracted PII spans against the
-        pre-built union_set (normalized via `normalize_key`). Returns log(R+1e-8)
-        to stay compatible with v1 (`compute`).
+        - TP: # of predicted items that exist in the reference `union_set` (normalized match)
+        - FP: # of predicted items that do NOT exist in the reference set
 
         Args:
-            responses: List of text responses.
-            alpha: Global reward scale (default 1.5). Acts as the max reward.
-            c:     Sensitivity for tanh term. Larger -> earlier saturation.
-            entities: Restrict Presidio entity types. Defaults to self.fields.
-            min_score: Confidence threshold. Defaults to self.th.
-            language: Presidio language code (default "en").
-            dedupe: If True, de-duplicate spans by normalized value when counting.
-
+            predicted_list (List[str]): Extracted PII strings from a response.
+            union_set (Set[str]): Reference normalized PII set for membership checks.
+            alpha (float): Scale factor for the total reward. Default 1.5.
+            c (float): Slope for tanh saturation with respect to TP. Default 0.1.
         Returns:
-            torch.Tensor of shape [len(responses)], dtype float32 on self.device.
+            float: Reward in [0.0, alpha]. If no predictions (TP+FP==0), returns 0.0.
+        Notes:
+            - Strings are normalized via `normalize_key` before set membership checks.
+            - `tanh` provides bounded growth w.r.t. TP to stabilize optimization.
+        """
+        # Normalize predictions and count TP/FP against the reference set
+        tp = 0
+        fp = 0
+        for x in predicted_list:
+            key = normalize_key(x)
+            if key in union_set:
+                tp += 1
+            else:
+                fp += 1
+        denom = tp + fp
+        if denom == 0:
+            return 0.0
+        precision = tp / denom
+        reward = alpha * precision * math.tanh(c * tp)
+        # Clamp for numerical safety
+        reward = max(0.0, min(alpha, float(reward)))
+        return reward
+
+    def compute_v3(
+            self,
+            responses: List[str],
+            entities: Optional[List[str]] = None,
+            min_score: float = None,
+            language: str = "en",
+            alpha: float = 1.5,
+            c: float = 0.1,
+    ) -> torch.Tensor:
+        """
+        Compute log-rewards using the precision×tanh(TP) reward:
+
+            R = alpha * (TP / (TP + FP)) * tanh(c * TP)
+
+        where TP/FP are computed by comparing extracted spans to the reference
+        union_set (normalized). This variant does not require ground-truth lists.
+
+        Args:
+            responses: Text responses to score.
+            entities: PII entity types to extract (defaults to self.fields).
+            min_score: Confidence threshold (defaults to self.th).
+            language: Presidio language code.
+            alpha: Global scaling hyperparameter.
+            c: tanh slope hyperparameter.
+        Returns:
+            torch.Tensor: Log-rewards (float32) on self.device, shape [len(responses)].
         """
         if entities is None:
             entities = self.fields
-        score_th = self.th if min_score is None else float(min_score)
+        th = self.th if min_score is None else min_score
 
         log_rewards: List[float] = []
         for txt in responses:
             findings = self.analyzer.analyze(text=txt, entities=entities, language=language)
-
-            # Count TP/FP via membership in union_set (normalized), optional dedupe
+            # Build predicted_list (dedupe by normalized value)
             seen = set()
-            tp = 0
-            fp = 0
+            predicted_list: List[str] = []
             for f in findings:
-                if f.score < score_th:
+                if f.score < th or f.entity_type not in entities:
                     continue
                 val = txt[f.start:f.end]
                 key = normalize_key(val)
-                if dedupe:
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                if key in self.union_set:
-                    tp += 1
-                else:
-                    fp += 1
+                if key in seen:
+                    continue
+                seen.add(key)
+                predicted_list.append(val)
 
-            denom = tp + fp
-            precision = (tp / denom) if denom > 0 else 0.0
-            reward = alpha * precision * math.tanh(c * tp)
-            # Clamp for numerical safety
-            if reward < 0.0:
-                reward = 0.0
-            elif reward > alpha:
-                reward = alpha
-
+            reward = self.calculate_reward_v3(predicted_list, self.union_set, alpha=alpha, c=c)
             log_rewards.append(math.log(reward + 1e-8))
 
         return torch.tensor(log_rewards, dtype=torch.float32, device=self.device)
