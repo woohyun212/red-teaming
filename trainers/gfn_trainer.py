@@ -472,10 +472,16 @@ class GFNTrainer(object):
                     attack_prompts.append(decoded_responses[i])
         else:
             # transformers pipeline path
-            num = self.args.num_r_samples
+            num = int(self.args.num_r_samples)
+            rep_prompts = []
+            parent_idx = []
+            for i, p in enumerate(victim_prompts):
+                for _ in range(num):
+                    rep_prompts.append(p)
+                    parent_idx.append(i)
+
             pipe_out = self.victim_model(
-                victim_prompts,
-                num_return_sequences=num,
+                rep_prompts,
                 do_sample=True,
                 max_new_tokens=self.args.victim_max_len,
                 temperature=self.args.victim_temp,
@@ -484,15 +490,12 @@ class GFNTrainer(object):
                 eos_token_id=self.victim_model_tokenizer.eos_token_id,
                 return_full_text=False,
             )
-            # `pipeline` returns a flat list of length len(victim_prompts) * num
-            # with blocks of `num` items per input prompt, each item is a dict with 'generated_text'.
-            for i, _ in enumerate(victim_prompts):
-                start = i * num
-                end = start + num
-                for item in pipe_out[start:end]:
-                    text = item["generated_text"] if isinstance(item, dict) else str(item)
-                    victim_responses.append(text)
-                    attack_prompts.append(decoded_responses[i])
+
+            # Map each generated text back to its source prompt using `parent_idx`
+            for out, idx in zip(pipe_out, parent_idx):
+                text = out.get("generated_text", out) if isinstance(out, dict) else str(out)
+                victim_responses.append(text)
+                attack_prompts.append(decoded_responses[idx])
 
 
         # 보상함수 교체하기 (v1/v2 토글)
