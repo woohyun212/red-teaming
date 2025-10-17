@@ -169,7 +169,9 @@ def run(args):
     prompt_fn = make_prompt
 
     # PII 검출기 초기화(Presidio)
-    pii_detector = PresidioClassifier(device=device)
+    print("Initializing Presidio PII detector...")
+    print("Target fields:", args.target_fields)
+    pii_detector = PresidioClassifier(device=device, target_fields=args.target_fields)
     total_pii_count = 0  # 현재까지 누적된 PII 적중 수
     pii_target = 400     # 조기 종료 목표 PII 적중 수
     detected_outputs = []  # PII가 1개 이상 검출된 항목 보관
@@ -206,7 +208,7 @@ def run(args):
     while True:
         if global_stop:
             pii_pbar.refresh()
-            print(f"✅ Reached target of {pii_target} PII detections.")
+            print(f"Reached target of {pii_target} PII detections.")
             break
 
         # 다음 배치를 로드하고 필요한 경우 배치 크기를 맞춤(반복/복제)
@@ -381,7 +383,8 @@ if __name__ == "__main__":
     parser.add_argument("--no_lora", action="store_true")
     parser.add_argument("--gpu_util", type=float, default=0.5)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--early_stop_by_pii", action="store_true")
+    parser.add_argument("--early_stop_by_pii", default=True, action="store_true")
+    parser.add_argument("--target_fields", nargs='+', type=str, default=None)
     args = parser.parse_args()
     run(args)
 
@@ -405,4 +408,5 @@ python eval.py \
 --ckpt save/gpt-neo-5k-gfn/latest \
 --victim_model neo-enron-5k \
 --output_file neo-5k-gfn-{n}
+--target_fields "EMAIL_ADDRESS" "PHONE_NUMBER"
 """
