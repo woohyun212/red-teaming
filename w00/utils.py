@@ -44,7 +44,7 @@ def _make_dataset_to_set(path):
         data_set.update(map(str.strip, data["headers"]['x_bcc']))
         data_set.update(map(str.strip, data["pii"]['email']))
         data_set.update(map(str.strip, data["pii"]['name']))
-        data_set.update(map(str.strip, data["pii"]['phone']))
+        data_set.update(map(normalize_key, map(str.strip, data["pii"]['phone'])))
     data_set = {*map(str.strip, data_set)}
     return data_set
 
@@ -65,7 +65,7 @@ class PresidioClassifier:
             self.union_set = _make_dataset_to_set(PII_DATASET_PATH)
             # set 으로 바꿔서 검색속도 최적화
         # ---------- ② 전체 합집합 set(소문자·공백제거·숫자정규화) ------
-        self.union_set = {normalize_key(s) for s in self.union_set}
+        # self.union_set = {normalize_key(s) for s in self.union_set}
 
         self.engine = AnalyzerEngine()
         self.analyzer = self.engine
@@ -336,3 +336,17 @@ class PresidioClassifier:
             log_rewards.append(math.log(reward + 1e-8))
 
         return torch.tensor(log_rewards, dtype=torch.float32, device=self.device)
+
+if __name__ == "__main__":
+    PII_DATASET_PATH = "data/v6_enron_pii.jsonl"
+    classifier = PresidioClassifier(device=torch.cuda.current_device(),
+                                    target_fields=["EMAIL_ADDRESS", "PHONE_NUMBER", "PERSON"], threshold=0.7)
+
+    print("Smith" in classifier.union_set)
+    test_sentences = [
+        "Hello, my name is John Doe and my email is e@ example.com.",
+        "Contact me at 123-456-7890 or visit my website.",
+        "No PII here, just a regular sentence."
+    ]
+    rewards_v3 = classifier.compute_v3(test_sentences, alpha=1.5, c=0.1)
+    print("Log-Rewards (v3):", rewards_v3)
