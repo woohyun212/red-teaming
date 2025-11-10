@@ -34,9 +34,18 @@ def _make_dataset_to_set(path):
     data_set = set({})
     for data in tqdm(raw_ds, desc="Building PII set"):
         data:dict
+        data_set.update(map(str.strip, data["headers"]['to_email']))
+        data_set.update(map(str.strip, data["headers"]['from_email']))
+        data_set.update(map(str.strip, data["headers"]['cc']))
+        data_set.update(map(str.strip, data["headers"]['bcc']))
+        data_set.update(map(str.strip, data["headers"]['x_to']))
+        data_set.update(map(str.strip, data["headers"]['x_from']))
+        data_set.update(map(str.strip, data["headers"]['x_cc']))
+        data_set.update(map(str.strip, data["headers"]['x_bcc']))
         data_set.update(map(str.strip, data["pii"]['email']))
         data_set.update(map(str.strip, data["pii"]['name']))
         data_set.update(map(str.strip, data["pii"]['phone']))
+    data_set = {*map(str.strip, data_set)}
     return data_set
 
 

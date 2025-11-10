@@ -295,7 +295,7 @@ class GFNTrainer(object):
                                    add_level_nums=None,
                                    fmt=f'%(asctime)s{delimiter}%(message)s',
                                    datefmt='%Y/%m/%d %H:%M:%S',
-                                   header=["date", "output", "c_log_reward", "lm_log_reward"])
+                                   header=["date", "atk_output", "vtm_output", "c_log_reward", "lm_log_reward"])
         # prompt format
         if "gpt" in args.victim_model or "dolly" in args.victim_model:
             self.prompt_fn = self.make_prompt
@@ -355,7 +355,10 @@ class GFNTrainer(object):
 
             for i in range(responses.size(0)):
                 self.csvlogger.info(
-                    ['"'+decoded_responses[i]+'"', c_log_reward[i].item(), lm_log_reward[i].item()])
+                    ['"'+decoded_responses[i]+'"',
+                     '"' + results["victim_responses"][i] + '"',
+                     c_log_reward[i].item(),
+                     lm_log_reward[i].item()])
 
         else:
             bs = batch["input_ids"].size(0)
@@ -526,7 +529,7 @@ class GFNTrainer(object):
 
         avg_c_log_reward = c_log_reward.mean(1).to(self.device)
 
-        return lm_logreward, avg_c_log_reward, decoded_responses
+        return lm_logreward, avg_c_log_reward, decoded_responses, victim_responses
 
     def get_online_samples(self, batch, max_len, temp=1.0):
         # input_ids is left-side padded
@@ -542,7 +545,7 @@ class GFNTrainer(object):
         log_z = outputs["log_z"]
         sum_logpf = outputs["sum_logpf"]
 
-        lm_logreward, c_log_reward, decoded_responses = self.get_logreward(
+        lm_logreward, c_log_reward, decoded_responses, victim_responses = self.get_logreward(
             batch, prompts_responses)
 
         results = {"lm_log_reward": lm_logreward,
@@ -551,6 +554,7 @@ class GFNTrainer(object):
                    "sum_logpf": sum_logpf,
                    "prompts_responses": prompts_responses,
                    "decoded_responses": decoded_responses,
+                   "victim_responses": victim_responses,
                    }
 
         return results
@@ -627,7 +631,7 @@ class GFNTrainer(object):
                 min_new_tokens=self.args.min_len,
                 pad_token_id=self.tokenizer.pad_token_id
             )
-            lm_log_reward, c_log_reward, decoded_responses = self.get_logreward(
+            lm_log_reward, c_log_reward, decoded_responses, victim_responses = self.get_logreward(
                 batch, prompts_responses)
 
             log_reward = (lm_log_reward / gamma) + \
@@ -731,7 +735,7 @@ class GFNTrainer(object):
                      "attention_mask": attention_mask.repeat(prompts_responses.size(0), 1)
                      }
 
-            lm_log_reward, c_log_reward, decoded_responses = self.get_logreward(
+            lm_log_reward, c_log_reward, decoded_responses, victim_responses = self.get_logreward(
                 batch, prompts_responses)
 
             log_reward = lm_log_reward + (c_log_reward / self.args.beta)
@@ -765,7 +769,7 @@ class GFNTrainer(object):
                     min_new_tokens=self.args.min_len,
                     pad_token_id=self.tokenizer.pad_token_id
                 )
-                lm_log_reward, c_log_reward, decoded_responses = self.get_logreward(
+                lm_log_reward, c_log_reward, decoded_responses, victim_responses = self.get_logreward(
                     batch, prompts_responses)
 
                 log_reward = lm_log_reward + (c_log_reward / self.args.beta)
