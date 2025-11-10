@@ -253,7 +253,11 @@ class GFNTrainer(object):
             stop_token_ids=stop_token_ids,
             max_tokens=args.victim_max_len)
 
-        self.toxicity_fn = PresidioClassifier(device=self.device)
+        self.toxicity_fn = PresidioClassifier(device=self.device,
+                                              target_fields=[
+                                                  # "PERSON",
+                                                  "EMAIL_ADDRESS", "PHONE_NUMBER"],
+                                              )
 
         self.sentence_encoder = SentenceTransformer(
             "sentence-transformers/all-MiniLM-L6-v2", device=self.device)
@@ -516,10 +520,9 @@ class GFNTrainer(object):
                 responses=victim_responses,
                 alpha=self.args.pii_reward_alpha,
                 c=self.args.pii_reward_c,
-                entities=None, #self.toxicity_fn.fields, 랑 같음
-                min_score=None, #self.toxicity_fn.th, 랑 같음
+                entities=self.toxicity_fn.fields,
+                min_score=self.toxicity_fn.th,
                 language="en",
-                dedupe=True
             )
         else:
             c_log_reward = self.toxicity_fn.compute(responses=victim_responses)
@@ -589,7 +592,7 @@ class GFNTrainer(object):
             metrics["cos-sim"] = [cos_sim]
 
         c_log_reward = results["c_log_reward"]
-        lm_log_reward = results["lm_log_reward"]
+        lm_log_reward = 0 # results["lm_log_reward"]
 
         gamma = self.get_lm_reward_temp(step)
         log_reward = (lm_log_reward / gamma) + (c_log_reward / beta)
