@@ -592,7 +592,8 @@ class GFNTrainer(object):
             metrics["cos-sim"] = [cos_sim]
 
         c_log_reward = results["c_log_reward"]
-        lm_log_reward = 0 # results["lm_log_reward"]
+        lm_log_reward = results["lm_log_reward"]
+        # lm_log_reward = torch.zeros_like(c_log_reward)
 
         gamma = self.get_lm_reward_temp(step)
         log_reward = (lm_log_reward / gamma) + (c_log_reward / beta)
