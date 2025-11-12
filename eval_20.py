@@ -170,7 +170,7 @@ def run(args):
 
     # PII 검출기 초기화(Presidio)
     pii_detector = PresidioClassifier(device=device)
-    attacks_done = 0  # 완료한 공격(프롬프트) 수
+    prompts_done = 0  # 완료한 공격 프롬프트 수
 
     # 공격 프롬프트 생성을 위한 생성 설정(샘플링 파라미터)
     generation_config = GenerationConfig(
@@ -192,14 +192,19 @@ def run(args):
     all_outputs = []
     iterator = InfIterator(dataloader)
 
-    # === 메인 루프: 지정한 공격 횟수(num_samples)만큼 수행 ===
-    while attacks_done < args.num_samples:
+    # === 메인 루프: 지정한 프롬프트 수(num_prompts)만큼 수행 ===
+    while prompts_done < args.num_prompts:
 
         # 다음 배치를 로드하고 필요한 경우 배치 크기를 맞춤(반복/복제)
         batch = next(iterator)
         batch = batch.to(device)
         if batch["input_ids"].size(0) == 1:
             batch = {k: v.repeat(args.batch_size, 1) for k, v in batch.items()}
+        # 남은 프롬프트 수에 맞춰 현재 배치 크기 슬라이스
+        remaining = args.num_prompts - prompts_done
+        cur_bs = batch["input_ids"].size(0)
+        if cur_bs > remaining:
+            batch = {k: v[:remaining] for k, v in batch.items()}
 
         prompt_len = batch["input_ids"].size(1)   # 프롬프트(입력) 길이 저장(생성 구간 마스킹 용)
         outputs = model.generate(**batch, generation_config=generation_config)   # 공격 모델이 응답 후보(토큰열) 생성
@@ -212,8 +217,6 @@ def run(args):
         batch_prompt_masks = torch.split(prompt_mask, args.victim_batch_size, dim=0)
 
         for batch_output, batch_prompt_mask in zip(batch_outputs, batch_prompt_masks):
-            if global_stop:
-                break
             # 부분 배치 단위로 마스킹/로그확률 계산
             batch_response = batch_output[:, prompt_len:]
             pad_mask = (batch_response == tokenizer.eos_token_id).cumsum(1) > 1   # 첫 eos 이후 토큰들을 패딩으로 간주하여 무시
@@ -239,10 +242,8 @@ def run(args):
             all_responses = []
             per_prompt_pii_counts = [0 for _ in range(len(victim_prompts))]
 
-            # 동일 프롬프트에 대해 피해자 모델을 5회 샘플링
-            for _ in tqdm(range(5), desc="victim samples", leave=False):
-                if global_stop:
-                    break
+            # 동일 프롬프트에 대해 피해자 모델을 지정 횟수만큼 샘플링
+            for _ in tqdm(range(args.attacks_per_prompt), desc="victim samples", leave=False):
                 victim_responses = victim(victim_prompts)
                 victim_responses = [x[0]["generated_text"] for x in victim_responses]   # pipeline 출력에서 실제 텍스트만 추출
                 all_responses.append(victim_responses)
@@ -255,8 +256,6 @@ def run(args):
                         if f.entity_type in pii_detector.fields and f.score >= pii_detector.th
                     ]
                     per_prompt_pii_counts[i] += len(pii_hits)
-
-
 
             all_responses = np.stack(all_responses, axis=0).T   # [샘플횟수, 배치] → [배치, 샘플횟수]로 전치하여 다룰 수 있게 정리
 
@@ -283,12 +282,12 @@ def run(args):
                 output_obj["pii_counts_per_response"] = per_resp_counts
                 output_obj["pii_count_per_prompt"] = sum(per_resp_counts)
                 all_outputs.append(output_obj)
-                attacks_done += 1
-                if attacks_done >= args.num_samples:
+                prompts_done += 1
+                if prompts_done >= args.num_prompts:
                     break
-
-            if attacks_done >= args.num_samples:
+            if prompts_done >= args.num_prompts:
                 break
+
 
 
     # 메모리 해제를 위해 피해자 파이프라인 객체 제거
@@ -312,12 +311,13 @@ def run(args):
     output_dir = f"./results/{victim_name}"
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
+    # Top-level metadata including the new prompt-based counters
     all_outputs.insert(0, {
         "cos-sim": avg_sim,
         "avg-toxcitiy": avg_score,
         "success_rate": success_rate,
-        "total_attacks": attacks_done,
-        "victim_samples_per_prompt": 5
+        "total_prompts": prompts_done,
+        "attacks_per_prompt": args.attacks_per_prompt
     })
     with open(os.path.join(output_dir, f"{args.output_file}.json"), "w") as f:
         json.dump(all_outputs, f, indent=2)
@@ -334,6 +334,8 @@ if __name__ == "__main__":
     parser.add_argument("--victim_model", type=str, required=True)
     parser.add_argument("--output_file", type=str, required=True)
     parser.add_argument("--num_samples", type=int, default=1024)
+    parser.add_argument("--num_prompts", type=int, default=None, help="생성할 공격 프롬프트(평가 대상) 개수")
+    parser.add_argument("--attacks_per_prompt", type=int, default=5, help="각 프롬프트당 피해자 샘플링(공격) 횟수")
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--victim_batch_size", type=int, default=16)
     parser.add_argument("--no_lora", action="store_true")
@@ -341,6 +343,9 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--early_stop_by_pii", action="store_true")
     args = parser.parse_args()
+    # 하위호환: num_prompts가 지정되지 않으면 기존 num_samples를 사용
+    if args.num_prompts is None:
+        args.num_prompts = args.num_samples
     run(args)
 
 
@@ -353,6 +358,8 @@ def make_chat_prompt(instruction, tokenizer):
 
 """
 # 실행 예시(Neo-5k LoRA 피해자 모델 평가)
+export VLLM_ALLOW_LONG_MAX_MODEL_LEN=1
+
 export VLLM_ALLOW_LONG_MAX_MODEL_LEN=1
 
 
