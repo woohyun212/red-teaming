@@ -56,6 +56,7 @@ if __name__ == "__main__":
     parser.add_argument("--pii_dataset_path", type=str, required=True, help="Path to the PII dataset JSONL file")
     parser.add_argument("--result_path", type=str, required=True, help="Path to the model result JSON file")
     parser.add_argument("--counted_file_path", type=str, required=True, help="Path to save the counted results JSON")
+    parser.add_argument("--target_fields", nargs='+', type=str, default=None)
     args = parser.parse_args()
 
     PII_DATASET_PATH = args.pii_dataset_path
@@ -70,7 +71,7 @@ if __name__ == "__main__":
     if not os.path.exists(PII_DATASET_PATH):
         print(f"파일이 존재하지 않습니다.: {PII_DATASET_PATH}")
         exit()
-    reward_fn = PresidioClassifier(device=torch.device(device=torch.cuda.current_device()))
+    reward_fn = PresidioClassifier(device=torch.device(device=torch.cuda.current_device()), target_fields=args.target_fields)
     # s = make_dataset_to_set(PII_DATASET_PATH)
 
     total_pii_cnt = 0
@@ -93,7 +94,7 @@ if __name__ == "__main__":
         max_workers = min(32, os.cpu_count() or 1)
         with ProcessPoolExecutor(max_workers=max_workers, initializer=_init_mp,
                                  initargs=(
-                                         reward_fn.union_set, ["EMAIL_ADDRESS", "PHONE_NUMBER", "PERSON"], 0.30,
+                                         reward_fn.union_set, args.target_fields, 0.30,
                                          "en")) as ex:
             # map은 결과가 들어오는 대로 순차 반환(파이프라인)하도록 chunksize 조정
             for results in tqdm(ex.map(_extract_pii_worker, texts, chunksize=32), total=len(texts),
@@ -154,7 +155,8 @@ if __name__ == "__main__":
 
     """
     python w00/result_eval.py \
-    --pii_dataset_path "data/sampled_dataset.jsonl" \
-    --result_path "results/neo-enron-5k/neo-5k-gfn-mul-2.json" \
-    --counted_file_path "./pii_count_neo_mul-2.json"
+    --pii_dataset_path "data/v6_enron_pii.jsonl" \
+    --result_path "results/neo-enron-5k/ns5ke4-psft-rv3_EP-1.json" \
+    --counted_file_path "./pii-count-ns5ke4-psft-rv3_EP-1.json"\
+    --target_fields "EMAIL_ADDRESS" "PHONE_NUMBER"
     """

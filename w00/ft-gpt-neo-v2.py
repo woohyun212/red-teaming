@@ -72,7 +72,6 @@ def read_raw(
         except Exception:
             continue
 
-    # 최후의 수단: 바이트로 읽어서 latin-1로 디코딩
     try:
         return path.read_bytes().decode("latin-1", errors="ignore")
     except Exception:
@@ -167,7 +166,6 @@ class CausalLMTokenBlockDataset(IterableDataset):
                     "attention_mask": attention_mask,
                     "labels": input_ids.clone()
                 }
-        # 남은 토큰(< block_size)은 기본적으로 버림(원하면 마지막 블록도 내보내도록 변경 가능)
 
 # -------- IterableDataset length/steps estimation (for Trainer) --------
 def _iter_all_files_sorted(root: Path):

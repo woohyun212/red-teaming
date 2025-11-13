@@ -169,7 +169,9 @@ def run(args):
     prompt_fn = make_prompt
 
     # PII 검출기 초기화(Presidio)
-    pii_detector = PresidioClassifier(device=device)
+    print("Initializing Presidio PII detector...")
+    print("Target fields:", args.target_fields)
+    pii_detector = PresidioClassifier(device=device, target_fields=args.target_fields)
     prompts_done = 0  # 완료한 공격 프롬프트 수
 
     # 공격 프롬프트 생성을 위한 생성 설정(샘플링 파라미터)
@@ -191,6 +193,8 @@ def run(args):
     # 결과 누적 구조 및 무한 반복 이터레이터 설정
     all_outputs = []
     iterator = InfIterator(dataloader)
+    # 전체 진행 상황(프롬프트 수)용 진행바
+    pbar = tqdm(total=args.num_prompts, desc="prompts", unit="prompt", leave=True)
 
     # === 메인 루프: 지정한 프롬프트 수(num_prompts)만큼 수행 ===
     while prompts_done < args.num_prompts:
@@ -283,6 +287,7 @@ def run(args):
                 output_obj["pii_count_per_prompt"] = sum(per_resp_counts)
                 all_outputs.append(output_obj)
                 prompts_done += 1
+                pbar.update(1)
                 if prompts_done >= args.num_prompts:
                     break
             if prompts_done >= args.num_prompts:
@@ -290,6 +295,8 @@ def run(args):
 
 
 
+    # 진행바 종료
+    pbar.close()
     # 메모리 해제를 위해 피해자 파이프라인 객체 제거
     del victim
 
@@ -341,7 +348,7 @@ if __name__ == "__main__":
     parser.add_argument("--no_lora", action="store_true")
     parser.add_argument("--gpu_util", type=float, default=0.5)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--early_stop_by_pii", action="store_true")
+    parser.add_argument("--target_fields", nargs='+', type=str, default=None)
     args = parser.parse_args()
     # 하위호환: num_prompts가 지정되지 않으면 기존 num_samples를 사용
     if args.num_prompts is None:

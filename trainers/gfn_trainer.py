@@ -179,7 +179,7 @@ class GFNTrainer(object):
         if os.path.isdir(args.victim_model):
             print(f"[INFO] Using local victim model from directory: {args.victim_model}")
 
-            # ✅ Base model: GPT‑Neo 1.3B
+            # Base model: GPT‑Neo 1.3B
             base_model_id = "EleutherAI/gpt-neo-1.3B"
 
             # Tokenizer from base (GPT‑Neo)
@@ -228,7 +228,7 @@ class GFNTrainer(object):
             self.use_vllm = False  # 분기 처리를 위한 플래그
 
         else:
-            # ✅ Hugging Face hub 모델이면 기존 vLLM 방식 사용
+            # Hugging Face hub 모델이면 기존 vLLM 방식 사용
             self.use_vllm = True  # 분기 처리를 위한 플래그
 
             self.victim_model = LLM(
