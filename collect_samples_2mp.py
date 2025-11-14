@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 _classifier = None
 _threshold_lm = -100.0
+_union_set = None
 
 def read_csv_robust(path: str) -> pd.DataFrame:
     """Read a possibly malformed CSV robustly.
@@ -60,11 +61,12 @@ def check_filename(exp_name, file_name):
 
 def _init_worker(device, target_fields, threshold, threshold_lm):
     """Initializer for each worker process: create a PresidioClassifier once per process."""
-    global _classifier, _threshold_lm
+    global _classifier, _threshold_lm, _union_set
     _classifier = PresidioClassifier(
         device=device,
         target_fields=target_fields,
         threshold=threshold,
+        union_set=_union_set
     )
     _threshold_lm = threshold_lm
 
@@ -126,10 +128,11 @@ def _process_row(row):
 
 def run(args):
     """Collect samples from log CSVs using multiprocessing for per-row processing."""
+    global _union_set
     items_by_instruction = {}
     check_count = 0
     seen_prompts = set()
-
+    _union_set = make_dataset_to_set(PII_DATASET_PATH)
     # Pre-compute list of relevant log files
     log_dir = "logs"
     input_files = [
