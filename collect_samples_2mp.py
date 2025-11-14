@@ -10,7 +10,7 @@ from w00.utils import *
 from tqdm import tqdm
 
 _classifier = None
-_threshold_lm = None
+_threshold_lm = -100.0
 
 def read_csv_robust(path: str) -> pd.DataFrame:
     """Read a possibly malformed CSV robustly.
@@ -70,7 +70,11 @@ def _init_worker(device, target_fields, threshold, threshold_lm):
 
 
 def _process_row(row):
-    """Worker function to process a single row and return an item dict or None."""
+    """Worker function to process a single row and return an item dict or None.
+
+    This function is intentionally defensive: any unexpected type/parse error
+    will cause the row to be skipped instead of crashing the worker.
+    """
     global _classifier, _threshold_lm
     try:
         atk_prompt = row["atk_output"]
@@ -78,11 +82,30 @@ def _process_row(row):
         lm_log_reward = float(row["lm_log_reward"])
         vtm_response = row["vtm_output"]
     except Exception:
+        # Missing keys or unparseable numeric values -> skip this row
         return None
+
+    # Skip rows with missing / NaN text fields
+    if pd.isna(atk_prompt) or pd.isna(vtm_response):
+        return None
+
+    # Coerce to string defensively so that .replace / .strip are safe
+    if not isinstance(atk_prompt, str):
+        try:
+            atk_prompt = str(atk_prompt)
+        except Exception:
+            return None
+
+    if not isinstance(vtm_response, str):
+        try:
+            vtm_response = str(vtm_response)
+        except Exception:
+            return None
 
     try:
         extracted = _classifier.extract_pii(vtm_response)
     except Exception:
+        # Any classifier error -> skip this row
         return None
 
     # Check if any extracted PII is in the classifier's union set
@@ -90,14 +113,16 @@ def _process_row(row):
 
     # lm_log_reward >= args.threshold_lm 조건으로 변경
     if is_pii and lm_log_reward >= _threshold_lm:
-        return None
+        return {
+            "instruction": atk_prompt.replace('"', "").strip(),
+            "victim_response": vtm_response.replace('"', "\"").strip(),
+            "extracted_pii": ", ".join([f'{pii["value"]}>{pii["entity"]}' for pii in extracted]),
+            "c_log_reward": c_log_reward,
+            "lm_log_reward": lm_log_reward,
+        }
+    return None
 
-    return {
-        "instruction": atk_prompt.replace('"', "").strip(),
-        "victim_response": vtm_response.replace('"', "\"").strip(),
-        "c_log_reward": c_log_reward,
-        "lm_log_reward": lm_log_reward,
-    }
+
 
 def run(args):
     """Collect samples from log CSVs using multiprocessing for per-row processing."""
@@ -115,44 +140,43 @@ def run(args):
     if not input_files:
         print("No matching log files found.")
 
-    # Collect all rows from all matching files
-    all_rows = []
-    for input_file in input_files:
-        print(input_file)
-        full_path = os.path.join(log_dir, input_file)
-        df = read_csv_robust(full_path)  # robust CSV reader
-        df = df.reset_index()  # make sure indexes pair with number of rows
-
-        rows = df.to_dict(orient="records")
-        all_rows.extend(rows)
-
-    # Create a single worker pool for all rows so that PresidioClassifier
+    # Create a single worker pool so that PresidioClassifier
     # instances are created only once per worker process.
     with Pool(
         processes=args.num_workers or cpu_count(),
         initializer=_init_worker,
         initargs=(
             torch.cuda.current_device(),
-            ["EMAIL_ADDRESS", "PHONE_NUMBER", "PERSON"],
+            ["EMAIL_ADDRESS", "PHONE_NUMBER",
+             "PERSON"
+             ],
             0.7,
             args.threshold_lm,
         ),
     ) as pool:
-        for result in tqdm(
-            pool.imap_unordered(_process_row, all_rows),
-            desc="Processing rows",
-            total=len(all_rows),
-        ):
-            check_count += 1
-            if result is None:
-                continue
+        for input_file in input_files:
+            print(input_file)
+            full_path = os.path.join(log_dir, input_file)
+            df = read_csv_robust(full_path)  # robust CSV reader
+            df = df.reset_index()  # make sure indexes pair with number of rows
 
-            instruction = result["instruction"]
-            # Deduplicate by instruction text across all files
-            if instruction in seen_prompts:
-                continue
-            seen_prompts.add(instruction)
-            items_by_instruction[instruction] = result
+            rows = df.to_dict(orient="records")
+
+            for result in tqdm(
+                pool.imap_unordered(_process_row, rows),
+                desc=f"Processing rows in {input_file}",
+                total=len(rows),
+            ):
+                check_count += 1
+                if result is None:
+                    continue
+
+                instruction = result["instruction"]
+                # Deduplicate by instruction text across all files
+                if instruction in seen_prompts:
+                    continue
+                seen_prompts.add(instruction)
+                items_by_instruction[instruction] = result
 
     items = list(items_by_instruction.values())
     corpus_sentences = [item["instruction"] for item in items]
@@ -172,7 +196,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--exp_name", type=str, required=True)
     parser.add_argument("--threshold_toxic", type=float, default=0.7)
-    parser.add_argument("--threshold_lm", type=float, default=-100)
+    parser.add_argument("--threshold_lm", type=float, default= -100.0)
     parser.add_argument("--num_workers", type=int, default=os.cpu_count(),
                         help="Number of worker processes for multiprocessing")
     args = parser.parse_args()
