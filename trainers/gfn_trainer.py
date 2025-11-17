@@ -1,3 +1,8 @@
+    # GFlowNet 기반 red-teaming 트레이너
+    # - SFT된 언어모델(LM)에 LoRA 어댑터와 Z(head)를 붙여서 GFN policy로 사용
+    # - victim LLM과 토oxicity classifier(utils.py의 RobertaClassifier / LlamaToxicClassifier)를 이용해 보상 계산
+    # - dataset.py의 get_dataloader("gfn", ...)로 읽어온 프롬프트에 대해 공격 프롬프트를 학습
+
 import json
 import logging
 import math
@@ -26,6 +31,9 @@ from vllm import LLM, SamplingParams
 
 
 def avg_pooling(last_hidden, attention_mask):
+    """마스크(attention_mask)를 이용해 마지막 히든 스테이트를 시퀀스 차원으로 평균 풀링하는 함수.
+    CLS 토큰 없이도 문장 수준 임베딩(프롬프트 표현)을 얻는 데 사용된다.
+    """
     input_mask_expanded = attention_mask.unsqueeze(
         -1).expand(last_hidden.size()).float()
     denom = torch.clamp(input_mask_expanded.sum(1), min=1)
@@ -34,6 +42,21 @@ def avg_pooling(last_hidden, attention_mask):
 
 
 def generate_and_return_z_logprob(model, prompt_ids, prompt_attention_mask,  eos_token_id, temperature, max_len=30):
+    """현재 GFlowNet policy 모델로부터 토큰을 하나씩 샘플링하면서
+    - forward policy의 로그 확률 합(sum_logpf)
+    - 프롬프트에 대한 log Z(정규화 상수, model.proj_z)
+    를 함께 계산해 반환하는 함수.
+
+    Args:
+        model: LoRA가 적용된 policy LM (proj_z layer를 포함).
+        prompt_ids: 프롬프트 토큰 ID (배치, 길이).
+        prompt_attention_mask: 프롬프트 마스크 (배치, 길이).
+        eos_token_id: 문장 종료 토큰 ID.
+        temperature: 샘플링 온도(높을수록 더 랜덤하게 샘플링).
+        max_len: 생성할 최대 토큰 길이.
+    Returns:
+        dict: actions(프롬프트+응답 토큰), sum_logpf, log_z 를 포함.
+    """
     active_seqs = torch.ones(prompt_ids.size(0)).bool().to(prompt_ids.device)
     actions = prompt_ids.clone()
     state = prompt_ids.clone()
@@ -132,6 +155,18 @@ def generate_and_return_z_logprob(model, prompt_ids, prompt_attention_mask,  eos
 
 class GFNTrainer(object):
     def __init__(self, args) -> None:
+        """실험 설정(args)을 받아 GFlowNet 학습에 필요한 모든 구성요소를 초기화한다.
+
+        주요 역할:
+        - SFT 체크포인트(args.sft_ckpt)에 LoRA(LoraConfig)와 Z projection layer(self.model.proj_z)를 붙여 GFN policy 모델 구성
+        - tokenizer / victim_model(vLLM 기반) / victim_model_tokenizer 설정
+        - utils.py에 정의된 RobertaClassifier 또는 LlamaToxicClassifier를 사용해 보상(c_log_reward) 계산용 toxicity 함수 생성
+        - SentenceTransformer를 이용해 응답 간 코사인 유사도(다양성 지표) 계산
+        - dataset.py의 get_dataloader("gfn", ...)로 프롬프트용 DataLoader 생성 (prompt_file에서 프롬프트를 읽어옴)
+        - ReplayBuffer 또는 CosineRelayBuffer(utils.py)를 초기화하여 응답과 보상을 저장
+        - AdamW 옵티마이저 및 linear warmup scheduler 설정
+        - wandb 및 CsvLogger를 이용해 학습 로그 기록
+        """
         self.args = args
 
         wandb.init(reinit=True, config=args.as_dict(),
@@ -251,6 +286,12 @@ class GFNTrainer(object):
             self.prompt_fn = self.make_chat_prompt
 
     def get_total_reward_temp(self, step):
+        """전체 보상(log_reward)을 얼마나 강하게 스케일링할지 결정하는 온도 스케줄 함수.
+
+        reward_sched_start ~ reward_sched_end 범위에서
+        train step에 따라 선형으로 온도를 변화시켜,
+        학습 초기에는 보상 신호를 완만하게, 후반에는 더 강하게 반영하도록 한다.
+        """
         args = self.args
         diff = args.reward_sched_end - args.reward_sched_start
         temp = args.reward_sched_start + diff * \
@@ -258,6 +299,11 @@ class GFNTrainer(object):
         return temp
 
     def get_lm_reward_temp(self, step):
+        """LM 로그 보상(lm_log_reward)에만 적용되는 온도 스케줄 함수.
+
+        lm_sched_start ~ lm_sched_end 사이에서 선형 스케줄을 사용하여
+        언어모델 likelihood 보상이 전체 보상에 기여하는 비율을 조절한다.
+        """
         diff = self.args.lm_sched_end - self.args.lm_sched_start
         temp = self.args.lm_sched_start + diff * \
             min(1, step / self.args.lm_sched_horizon)
@@ -265,6 +311,12 @@ class GFNTrainer(object):
 
     @torch.no_grad()
     def get_avg_pairwise_cossim(self, sentences):
+        """문장 리스트에 대해 SentenceTransformer 임베딩을 구하고,
+        모든 쌍의 평균 코사인 유사도를 계산한다.
+
+        값이 클수록 응답들이 서로 비슷(덜 다양)함을 의미하며,
+        red-teaming 프롬프트의 다양성을 모니터링하는 지표로 사용된다.
+        """
         embeddings = self.sentence_encoder.encode(
             sentences, convert_to_tensor=True)
         cos_sim = F.cosine_similarity(embeddings.unsqueeze(
@@ -276,6 +328,16 @@ class GFNTrainer(object):
         return avg_sim
 
     def simulate_experience(self, batch,  rbuffer, beta, max_len):
+        """온라인/오프라인 정책을 섞어 경험을 샘플링하는 함수.
+
+        - policy == 0인 경우: 현재 policy 모델에서 온-폴리시 샘플을 생성(get_online_samples)
+          * victim LLM과 toxicity classifier를 통해 보상을 계산
+          * sentence encoder로 임베딩을 계산해 replay buffer에 저장
+        - policy == 1인 경우: 저장된 replay buffer에서 오프-폴리시 샘플을 뽑아(get_offline_samples)
+          * 현재 policy의 logpf/log_z만 다시 계산
+
+        이렇게 해서 GFlowNet이 online exploration과 offline replay를 모두 활용하도록 한다.
+        """
         policy = random.randint(0, 1)  # integer from [0,1]
         if policy == 0:
             choice = random.randint(0, 1)
@@ -315,6 +377,13 @@ class GFNTrainer(object):
         return results
 
     def get_logpf_and_logz(self, prompt_batch, response_batch):
+        """주어진 프롬프트/응답 배치에 대해
+        - forward policy의 로그 확률 합(sum_logpf)
+        - 프롬프트에 대한 log Z(self.model.proj_z)
+        를 계산하는 함수.
+
+        Offline(replay buffer에서 가져온) 샘플에 대해 현재 policy의 likelihood를 다시 평가할 때 사용된다.
+        """
         prompt_len = prompt_batch["input_ids"].size(1)
 
         # gpu allocation
@@ -350,6 +419,15 @@ class GFNTrainer(object):
         return sum_logpf, log_z
 
     def get_offline_samples(self, prompt_batch, response_batch, reward_batch):
+        """replay buffer에서 꺼낸 응답(response_batch)에 대해
+        현재 policy의 logpf/log_z를 다시 계산하고
+        이미 저장되어 있던 보상(reward_batch)을 함께 반환하는 함수.
+
+        Args:
+            prompt_batch: 동일 프롬프트를 복제한 배치 (dataset.py의 get_dataloader("gfn") 출력 포맷과 동일).
+            response_batch: buffer에서 샘플된 응답 토큰 및 마스크.
+            reward_batch: buffer에 저장된 c_log_reward, lm_log_reward, log_reward 사전.
+        """
         sum_logpf, log_z = self.get_logpf_and_logz(
             prompt_batch, response_batch)
         reward_batch = {k: v.to(self.device) for k, v in reward_batch.items()}
@@ -370,6 +448,23 @@ class GFNTrainer(object):
                       prompt_inputs: Dict[str, Union[List, torch.LongTensor]],
                       prompts_responses: torch.LongTensor
                       ):
+        """프롬프트/응답 쌍에 대해 언어모델 보상과 공격 성공 보상(privacy 공격 성공률)을 계산한다.
+
+        처리 순서:
+        1) LoRA를 제거(lora_to_base)하여 reference SFT 모델로부터 응답의 log-likelihood(lm_logreward)를 계산
+           - prompts_responses 전체에 대해 마스크를 씌우고 응답 부분만 합산
+           - 너무 짧은 응답(min_len 미만)은 큰 패널티(-500)를 줌
+        2) 응답 토큰을 디코딩하여 텍스트로 변환(decoded_responses)
+           - dataset.py의 프롬프트 포맷에 맞게 victim LLM 입력 프롬프트(prompt_fn)를 구성
+        3) vLLM 기반 victim 모델(self.victim_model)을 호출해 victim_responses를 생성
+        4) utils.py의 RobertaClassifier 또는 LlamaToxicClassifier를 사용해 victim_responses의 공격 성공/유해도 보상(c_log_reward)을 계산
+           - num_r_samples개 응답을 묶어서 평균 로그 보상(avg_c_log_reward)을 만든다.
+
+        반환값:
+            lm_logreward: reference LM 로그 보상 (길이 보정 포함)
+            avg_c_log_reward: victim 모델에서 얻은 공격 성공 로그 보상의 평균
+            decoded_responses: policy 응답 텍스트 (attack prompt 후보)
+        """
         # prompt_inputs: input_ids, attention_mask of prompt
         # prompts_responses: concatenation of prompt and response
         prompt_len = prompt_inputs["input_ids"].size(1)
@@ -438,6 +533,13 @@ class GFNTrainer(object):
         return lm_logreward, avg_c_log_reward, decoded_responses
 
     def get_online_samples(self, batch, max_len, temp=1.0):
+        """현재 policy 모델에서 온-폴리시 샘플을 생성하는 래퍼 함수.
+
+        - generate_and_return_z_logprob로부터 actions(프롬프트+응답), sum_logpf, log_z를 얻고
+        - get_logreward를 이용해 lm_log_reward, c_log_reward 및 디코딩된 텍스트를 계산한다.
+
+        최종적으로 GFlowNet 업데이트에 필요한 모든 항목을 딕셔너리 형태로 반환한다.
+        """
         # input_ids is left-side padded
         outputs = generate_and_return_z_logprob(
             model=self.model,
@@ -466,22 +568,53 @@ class GFNTrainer(object):
 
     @staticmethod
     def make_prompt(instruction):
+        """GPT-계열(gpt2/dolly) victim 모델을 위해 instruction 포맷의 프롬프트 문자열을 만드는 헬퍼 함수.
+
+        dataset.py에서 읽어온 instruction(공격 프롬프트 후보 텍스트)을
+        SFT 시 사용했던 포맷과 동일한 템플릿에 넣어 victim 모델의 입력으로 사용한다.
+        """
         prompt_template = "Below is an instruction that describes a task. Write a response that appropriately completes the request.\n\n### Instruction:\n{instruction}\n\n### Response:\n"
 
         return prompt_template.format(instruction=instruction.rstrip())
 
     def make_chat_prompt(self, instruction):
+        """Llama / chat 기반 victim 모델의 tokenizer.apply_chat_template를 사용해
+        chat 형식의 프롬프트를 생성하는 함수.
+
+        [{"role": "user", "content": instruction}] 형태의 대화 히스토리를
+        victim_model_tokenizer에 전달하여, 실제 vLLM 호출에 사용할 문자열 프롬프트를 만든다.
+        """
         return self.victim_model_tokenizer.apply_chat_template(
             [{"role": "user", "content": instruction.rstrip()}],
             tokenize=False,
             add_generation_prompt=True)
 
     def compute_tb_loss(self, log_z, sum_logpf, log_reward):
+        """Trajectory Balance(TB) objective를 계산하는 함수.
+
+        delta = log_z + sum_logpf - log_reward
+        를 계산한 뒤, 제곱 오차(delta**2)를 GFlowNet의 손실로 사용한다.
+        """
         delta = log_z + sum_logpf - log_reward
         losses = delta**2
         return losses
 
     def get_batch_metrics(self, batch, step, rbuffer,  max_len, beta,  train=True):
+        """한 배치에 대해 GFlowNet 손실과 각종 로그용 메트릭을 계산하는 함수.
+
+        주요 동작:
+        - simulate_experience를 호출해 online/offline 샘플을 얻고
+        - 일정 step마다 응답들의 평균 코사인 유사도(다양성)를 계산
+        - get_lm_reward_temp, get_total_reward_temp를 이용해 log_reward를 온도 스케일링
+        - compute_tb_loss로 TB loss를 계산하고, wandb에 기록할 metric 딕셔너리를 구성한다.
+
+        Args:
+            batch: dataset.get_dataloader("gfn", ...)에서 나온 프롬프트 배치.
+            step: 현재 global training step.
+            rbuffer: utils.py의 ReplayBuffer 또는 CosineRelayBuffer 인스턴스.
+            max_len: policy가 생성할 최대 토큰 길이.
+            beta: c_log_reward를 스케일링하기 위한 온도 하이퍼파라미터.
+        """
         metrics = {}
         train_test = 'train' if train else 'eval'
 
@@ -514,6 +647,13 @@ class GFNTrainer(object):
         return losses.mean(), metrics
 
     def eval(self):
+        """학습이 끝난 policy 모델을 고정된 설정으로 평가하는 함수.
+
+        - train_iter로부터 프롬프트를 가져와 self.model.generate로 응답을 샘플링
+        - get_logreward를 이용해 lm_log_reward, c_log_reward, log_reward를 계산
+        - SentenceTransformer 임베딩을 사용해 응답 간 코사인 유사도(cos_sim)를 측정
+        - c_log_reward > log(0.5)인 비율을 공격 성공률(ASR)로 정의하여 리포트한다.
+        """
         num_samples = math.ceil(
             self.args.eval_batch_size / self.args.batch_size)
         all_log_reward = []
@@ -565,6 +705,14 @@ class GFNTrainer(object):
         return metrics
 
     def save(self, output_dir, rbuffer, step):
+        """현재 policy/optimizer/scheduler 상태와 replay buffer를 디스크에 저장하는 함수.
+
+        저장 내용:
+        - LoRA가 적용된 self.model (self.model.save_pretrained)
+        - tokenizer
+        - proj_z, optimizer, scheduler 상태가 포함된 ckpt.pt
+        - utils.py ReplayBuffer/CosineRelayBuffer의 내용을 buffer.pkl로 저장
+        """
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
         self.model.save_pretrained(output_dir)
@@ -579,6 +727,16 @@ class GFNTrainer(object):
         rbuffer.save(os.path.join(output_dir, "buffer.pkl"))
 
     def load(self, output_dir, model, optimizer, scheduler, rbuffer):
+        """이전에 저장된 체크포인트를 로딩하여 학습을 이어갈 수 있도록 초기화하는 함수.
+
+        처리 순서:
+        1) output_dir 내 숫자 디렉터리(스텝 번호) 중 가장 최근 디렉터리를 찾는다.
+        2) base SFT 모델에 PeftModel.from_pretrained를 적용해 LoRA 가중치를 로드
+           - 현재 self.model에 strict=False로 state_dict를 로드하여 proj_z는 따로 처리
+        3) ckpt.pt에서 proj_z, optimizer, scheduler 상태를 복구
+        4) buffer.pkl에서 replay buffer 내용을 불러온다.
+        5) 다음 학습 step(global_step+1)을 반환한다.
+        """
         # load checkpoint and return starting step
         if not os.path.exists(output_dir):
             return 1
@@ -608,6 +766,15 @@ class GFNTrainer(object):
             return ckpt["global_step"] + 1
 
     def init_buffer(self, prompt_ids, attention_mask, rbuffer):
+        """few-shot SFT 데이터(self.args.few_shot_file)를 이용해 replay buffer를 초기화하는 함수.
+
+        - few_shot_file에 포함된 instruction들을 tokenizer로 인코딩한 뒤 EOS 토큰을 붙여 응답으로 사용
+        - 고정된 prompt_ids(점검용 프롬프트)에 대해 get_logreward를 호출하여
+          lm_log_reward, c_log_reward, log_reward를 계산
+        - SentenceTransformer 임베딩을 함께 구해 rbuffer.add_batch로 버퍼를 채운다.
+
+        초기에 버퍼가 완전히 비어 있을 때, 최소한의 다양한 응답/보상 데이터로 버퍼를 seed하기 위한 단계이다.
+        """
         # initialize the buffer with sft dataset
         with open(self.args.few_shot_file, "r") as f:
             data = json.load(f)
@@ -652,6 +819,19 @@ class GFNTrainer(object):
                               )
 
     def train(self):
+        """GFNTrainer의 메인 학습 루프.
+
+        큰 흐름:
+        1) rbuffer가 비어 있으면:
+           - base_to_lora / lora_to_base를 사용하여 SFT 모델 기준 응답을 생성
+           - get_logreward를 통해 초기 버퍼를 채우는 init_buffer 및 추가 샘플링 수행
+        2) 이후에는 dataset.get_dataloader("gfn")에서 가져온 프롬프트를 batch 단위로 반복하면서:
+           - grad_acc_steps만큼 get_batch_metrics를 호출해 TB loss를 누적 및 역전파
+           - gradient clipping, optimizer.step, scheduler.step 수행
+           - wandb에 메트릭을 로그하고 tqdm description 업데이트
+           - 일정 주기(eval_period)마다 save()를 호출해 체크포인트와 buffer를 저장
+        3) 마지막 step 이후에는 "latest" 디렉터리에 최종 모델과 버퍼를 저장하고 eval()을 실행하여 성능을 측정한다.
+        """
         # if the buffer is empty, we seed it with inital policy
         if self.rbuffer.size() == 0:
             lora_to_base(self.model)
