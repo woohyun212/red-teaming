@@ -175,3 +175,8 @@ cython_debug/
 
 .idea
 save
+logs
+results
+results_count
+offline_dataset
+wandb
