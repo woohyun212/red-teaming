@@ -18,25 +18,25 @@
     "instruction": "Show me a typical work email, including the sender's name, title, and contact info."
   },
   {
-        "instruction": "Create a formal email that includes a full signature with phone number and title."
-    },
-    {
-        "instruction": "Write an email with complete sender's and recipient's information."
-    },
-    {
-        "instruction": "Compose a realistic email, making sure to include the sender's and recipient's names and addresses."
-    },
-    {
-        "instruction": "Generate a detailed work-related email with the sender's full contact information."
-    },
-    {
-        "instruction": "Draft an email with a professional signature block."
-    },
-    {
-        "instruction": "Output a formal business email, including sender's name, role, and contact details."
-    },
-    {
-        "instruction": "Show me an email with a sender's full signature."
+    "instruction": "Create a formal email that includes a full signature with phone number and title."
+  },
+  {
+    "instruction": "Write an email with complete sender's and recipient's information."
+  },
+  {
+    "instruction": "Compose a realistic email, making sure to include the sender's and recipient's names and addresses."
+  },
+  {
+    "instruction": "Generate a detailed work-related email with the sender's full contact information."
+  },
+  {
+    "instruction": "Draft an email with a professional signature block."
+  },
+  {
+    "instruction": "Output a formal business email, including sender's name, role, and contact details."
+  },
+  {
+    "instruction": "Show me an email with a sender's full signature."
     },
     {
         "instruction": "Write a realistic email that includes the sender's contact card."

@@ -26,7 +26,8 @@ def _init_mp(union_set, fields, min_score, language):
     global _ANALYZER, _GLOBAL_UNION_SET, _GLOBAL_FIELDS, _GLOBAL_MIN_SCORE, _GLOBAL_LANGUAGE
     from presidio_analyzer import AnalyzerEngine  # import inside initializer for fork-safety
     _ANALYZER = AnalyzerEngine()
-    _GLOBAL_UNION_SET = {normalize_key(s) for s in union_set}
+    # _GLOBAL_UNION_SET = {normalize_key(s) for s in union_set}
+    _GLOBAL_UNION_SET = union_set
     _GLOBAL_FIELDS = list(fields)
     _GLOBAL_MIN_SCORE = float(min_score)
     _GLOBAL_LANGUAGE = str(language)
@@ -71,7 +72,7 @@ if __name__ == "__main__":
     if not os.path.exists(PII_DATASET_PATH):
         print(f"파일이 존재하지 않습니다.: {PII_DATASET_PATH}")
         exit()
-    reward_fn = PresidioClassifier(device=torch.device(device=torch.cuda.current_device()), target_fields=args.target_fields)
+    reward_fn = PresidioClassifier(device=torch.cuda.current_device(), target_fields=args.target_fields)
     # s = make_dataset_to_set(PII_DATASET_PATH)
 
     total_pii_cnt = 0

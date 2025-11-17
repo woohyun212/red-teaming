@@ -842,25 +842,3 @@ class GFNTrainer(object):
         eval_metrics = self.eval()
         wandb.log(eval_metrics, step=global_step)
         wandb.finish()
-
-"""
-export SFT_CKPT=save/gpt2-sft-position-final/latest
-
-python main.py \
---exp_name gfn-neo-5k-r_v3-1 \
---sft_ckpt save/gpt2-sft-position-final/latest \
---use_pii_reward_version 3
---sim_tolerance 0.25 \
---victim_model ./save/gpt-neo-enron-e4-5k \
---lr 1e-4 \
---max_len 20 \
---reward_sched_horizon 500 \
---train_steps 5000 \
---seed 42 \
---temp_low 0.5 \
---temp_high 2.0 \
---buffer_size 1000 \
---lm_sched_end 1.0 \
---beta 0.1 \
---sim_tolerance 0.25
-"""

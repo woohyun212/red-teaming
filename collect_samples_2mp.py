@@ -12,6 +12,10 @@ from tqdm import tqdm
 _classifier = None
 _threshold_lm = -100.0
 _union_set = None
+_target_fields = [
+    "EMAIL_ADDRESS", "PHONE_NUMBER",
+     "PERSON"
+]
 
 def read_csv_robust(path: str) -> pd.DataFrame:
     """Read a possibly malformed CSV robustly.
@@ -128,7 +132,7 @@ def _process_row(row):
 
 def run(args):
     """Collect samples from log CSVs using multiprocessing for per-row processing."""
-    global _union_set
+    global _union_set, _target_fields
     items_by_instruction = {}
     check_count = 0
     seen_prompts = set()
@@ -143,6 +147,7 @@ def run(args):
     if not input_files:
         print("No matching log files found.")
 
+    print("target_fields :",_target_fields)
     # Create a single worker pool so that PresidioClassifier
     # instances are created only once per worker process.
     with Pool(
@@ -150,9 +155,7 @@ def run(args):
         initializer=_init_worker,
         initargs=(
             torch.cuda.current_device(),
-            ["EMAIL_ADDRESS", "PHONE_NUMBER",
-             "PERSON"
-             ],
+            _target_fields,
             0.7,
             args.threshold_lm,
         ),

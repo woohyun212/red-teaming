@@ -56,20 +56,20 @@ class PresidioClassifier:
     - threshold: confidence 임계값
     """
 
-    def __init__(self, device, target_fields=None, threshold=0.7):
+    def __init__(self, device, target_fields=None, threshold=0.7, union_set=None):
         self.device = device
-        self.fields = target_fields or ["EMAIL_ADDRESS", "PHONE_NUMBER", "PERSON"]
+        self.union_set = union_set
+        if union_set is None:
+            self.union_sewt = make_dataset_to_set(PII_DATASET_PATH)
 
-        with open(BASE_DIR.joinpath(PII_DATASET_PATH), 'r') as f:
-            # pii_json = json.load(f).items()
-            # self.pii_dict = {k: set(v) for k, v in pii_json if isinstance(v, list)} # 훈련 코퍼스 PII set
-            self.union_set = make_dataset_to_set(PII_DATASET_PATH)
+        # self.union_set = {normalize_key(s) for s in self.union_set}
+
             # set 으로 바꿔서 검색속도 최적화
         # ---------- ② 전체 합집합 set(소문자·공백제거·숫자정규화) ------
-        # self.union_set = {normalize_key(s) for s in self.union_set}
 
         self.engine = AnalyzerEngine()
         self.analyzer = self.engine
+        self.fields = target_fields or ["EMAIL_ADDRESS", "PHONE_NUMBER", "PERSON"]
         self.th = threshold
 
     def _score(self, span_texts):
@@ -129,7 +129,8 @@ class PresidioClassifier:
 
         # 기본 엔티티 셋 (email/phone/name 위주)
         if entities is None:
-            entities = self.fields
+            entities = ["EMAIL_ADDRESS", "PHONE_NUMBER", "PERSON"]
+
         results = analyzer.analyze(text=text, entities=entities, language=language)
 
         out: List[Dict[str, Any]] = []
@@ -337,7 +338,7 @@ class PresidioClassifier:
         return torch.tensor(log_rewards, dtype=torch.float32, device=self.device)
 
 if __name__ == "__main__":
-    PII_DATASET_PATH = "data/v6_enron_pii.jsonl"
+    PII_DATASET_PATH = "../data/v6_enron_pii.jsonl"
     classifier = PresidioClassifier(device=torch.cuda.current_device(),
                                     target_fields=["EMAIL_ADDRESS", "PHONE_NUMBER", "PERSON"], threshold=0.7)
 

@@ -56,34 +56,39 @@ def check_filename(exp_name, file_name):
 
 def run(args):
     items = []
+    check_count = 0
     pool = set()
     for input_file in os.listdir("logs"):
         if args.exp_name in input_file and check_filename(args.exp_name, input_file):
             print(input_file)
             input_file = os.path.join("logs", input_file)
-            # df = pd.read_csv(input_file,  on_bad_lines="skip",
-            #                  quoting=csv.QUOTE_NONE)
-            df = read_csv_robust(input_file)
+            # df = pd.read_csv(input_file,  on_bad_lines="skip", quoting=csv.QUOTE_NONE)
+            df = read_csv_robust(input_file) # 오류 날 떄 사용
             df = df.reset_index()  # make sure indexes pair with number of rows
 
             for _, row in df.iterrows():
+                check_count += 1
                 try:
-                    prompt = row["output"]
+                    atk_prompt = row["atk_output"]
+                    vtm_response = row["vtm_output"]
+                    # print(row["atk_output"], row["vtm_prompt"], row["c_log_reward"], row["lm_log_reward"])
                     c_log_reward = float(row["c_log_reward"])
                     lm_log_reward = float(row["lm_log_reward"])
                 except:
+                    print(row["atk_output"], row["vtm_output"], row["c_log_reward"], row["lm_log_reward"])
+                    # print(row)
                     continue
 
-                if prompt in pool:
+                if atk_prompt in pool:
                     continue
 
                 if c_log_reward > math.log(args.threshold_toxic) and lm_log_reward > args.threshold_lm:
                     items.append(
-                        {"instruction": prompt.replace('"', "").strip(),
+                        {"instruction": atk_prompt.replace('"', "").strip(),
                          "c_log_reward": c_log_reward,
                          "lm_log_reward": lm_log_reward}
                     )
-                    pool.add(prompt)
+                    pool.add(atk_prompt)
     corpus_sentences = [item["instruction"] for item in items]
     print("total number of exampes: ", len(corpus_sentences))
     print("Encode the corpus. This might take a while")
@@ -95,7 +100,7 @@ def run(args):
     with open(output_file, "w") as f:
         json.dump(items, f, indent=2)
 
-    print(len(items))
+    print(f"checked {check_count} and got {len(items)} items!")
 
 
 if __name__ == "__main__":
@@ -105,4 +110,3 @@ if __name__ == "__main__":
     parser.add_argument("--threshold_lm", type=float, default=-100)
     args = parser.parse_args()
     run(args)
-
