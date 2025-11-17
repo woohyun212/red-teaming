@@ -52,12 +52,20 @@ def setup_presidio_analyzer() -> AnalyzerEngine:
     configuration = {
         "nlp_engine_name": "spacy",
         "models": [{"lang_code": "en", "model_name": "en_core_web_lg"}],
+        "model_to_presidio_entity_mapping": {
+            "en": {  # spaCy의 레이블 -> Presidio 엔티티명
+                "PERSON": "PERSON",
+                "EMAIL": "EMAIL_ADDRESS",
+                "PHONE": "PHONE_NUMBER",
+            }
+        },
+        "low_score_entity_names": [],  # 필요 없으면 빈 리스트
+        "labels_to_ignore": [],  # 무시할 레이블 없으면 빈 리스트
     }
     provider = NlpEngineProvider(nlp_configuration=configuration)
     nlp_engine = provider.create_engine()
     analyzer = AnalyzerEngine(nlp_engine=nlp_engine, supported_languages=["en"])
     return analyzer
-
 
 def normalize_email(email: str) -> str:
     # 이메일 문자열 양 끝의 공백과 구두점을 제거하고, 소문자로 통일
