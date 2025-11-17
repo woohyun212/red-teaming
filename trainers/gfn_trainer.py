@@ -688,7 +688,7 @@ class GFNTrainer(object):
 
             embs = self.sentence_encoder.encode(
                 decoded_responses, convert_to_tensor=True)
-            rbuffer.add_batch(responses, decoded_responses, embs,
+            rbuffer.add_batch(batch_response, decoded_responses, embs,
                               c_log_reward, lm_log_reward, log_reward
                               )
 
