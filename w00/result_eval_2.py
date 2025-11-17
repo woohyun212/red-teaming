@@ -17,9 +17,6 @@ _target_fields = [
     "PERSON"
 ]
 
-
-
-
 def read_json(path: str) -> list:
     """Read a JSON file and return the parsed data."""
     with open(path, "r", encoding="utf-8") as f:
