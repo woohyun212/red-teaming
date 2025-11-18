@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
+from tqdm import tqdm
 # Microsoft Presidio 기반 PII 탐지를 위해 AnalyzerEngine과 spaCy NLP 엔진 provider를 사용
 from presidio_analyzer import AnalyzerEngine
 from presidio_analyzer.nlp_engine import NlpEngineProvider
@@ -37,7 +38,9 @@ def setup_logging() -> None:
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
-
+    # Presidio 관련 로거는 에러만 보이게 줄이기
+    logging.getLogger("presidio-analyzer").setLevel(logging.ERROR)
+    logging.getLogger("presidio-anonymizer").setLevel(logging.ERROR)
 
 def setup_presidio_analyzer() -> AnalyzerEngine:
     # spaCy 기반 NLP 엔진 설정
@@ -210,7 +213,7 @@ def process_single_file(
     # 2) Presidio + Regex로 PII 추출
     # 3) 상대 경로 id 구성
     # 4) JSONL 한 줄을 출력 파일에 기록
-    logging.info("Processing file: %s", file_path)
+    # logging.info("Processing file: %s", file_path)
 
     # Presidio와 Regex 두 가지 방법으로 PII 감지
     text = read_file_text(file_path)
@@ -241,6 +244,11 @@ def process_single_file(
     has_pii = any(pii[key] for key in ("names", "emails", "phones"))
     return has_pii
 
+def count_email_files(root_dir: Path) -> int:
+    count = 0
+    for _ in iter_email_files(root_dir):
+        count += 1
+    return count
 
 def main() -> None:
     # 스크립트 진입점: 디렉토리 경로 설정, Presidio 초기화, 파일 순회 및 JSONL 작성
@@ -269,11 +277,15 @@ def main() -> None:
     pii_files = 0
     skipped_files = 0
 
+    total_files = count_email_files(root_dir) # 전체 파일 수 미리 계산
+    logging.info("Total email files to process: %d", total_files)
+
     # 출력 파일을 한 번 열고, 모든 메일을 순회하며 한 메일당 한 줄씩 JSONL을 append
     with output_path.open("w", encoding="utf-8") as out_f:
-        for file_path in iter_email_files(root_dir):
+        for file_path in tqdm(iter_email_files(root_dir),
+                              desc="Processing emails", total=total_files):
             # 모든 메일 파일에 대해 개별 처리; 에러가 발생해도 다른 파일 처리는 계속 진행
-            total_files += 1
+            # total_files += 1
             result = process_single_file(file_path, root_dir, analyzer, out_f)
             if result is None:
                 skipped_files += 1
