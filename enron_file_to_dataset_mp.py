@@ -17,6 +17,7 @@ from tqdm import tqdm
 # Microsoft Presidio 기반 PII 탐지를 위해 AnalyzerEngine과 spaCy NLP 엔진 provider를 사용
 from presidio_analyzer import AnalyzerEngine
 from presidio_analyzer.nlp_engine import NlpEngineProvider
+import mailparser
 
 
 # 멀티프로세싱 환경에서 각 워커 프로세스마다 Presidio AnalyzerEngine을 초기화하기 위한 전역 변수
@@ -32,6 +33,27 @@ def init_worker() -> None:
     # 이미 초기화된 경우 다시 만들 필요 없음
     if ANALYZER is None:
         ANALYZER = setup_presidio_analyzer()
+
+def get_mail_body(raw_mail: str) -> str:
+    """
+    메일 원본 문자열에서 바디(text/plain 기준)를 추출한다.
+    - mailparser가 설치되어 있으면 mailparser.parse_from_string(raw_mail).body 사용
+    - mailparser가 없거나 실패하면, 첫 번째 빈 줄(헤더/바디 구분) 이후를 바디로 간주
+    """
+    # mailparser가 사용 가능한 경우 우선 시도
+    # if mailparser is not None:
+    try:
+        mail = mailparser.parse_from_string(raw_mail)
+        if mail and mail.body:
+            return mail.body
+    except Exception as e:
+        logging.error("mailparser failed to parse mail body: %s", e)
+
+    # mailparser가 없거나 실패한 경우: 단순 헤더/바디 분리 (첫 번째 빈 줄 기준)
+    parts = raw_mail.split("\n\n", 1)
+    if len(parts) == 2:
+        return parts[1]
+    return raw_mail
 
 # 이메일을 보조적으로 검출하기 위한 정규표현식 (Presidio 탐지 결과를 보완)
 EMAIL_REGEX = r"[a-zA-Z0-9_.+\-]+@[a-zA-Z0-9\-]+\.[a-zA-Z0-9.\-]+"
@@ -113,29 +135,39 @@ def normalize_name(name: str) -> str:
 
 
 def extract_pii_with_presidio(
-    text: str, analyzer: AnalyzerEngine
+    full_text: str, body_text: str, analyzer: AnalyzerEngine
 ) -> Dict[str, Set[str]]:
-    # Presidio AnalyzerEngine을 사용하여 PERSON, EMAIL_ADDRESS, PHONE_NUMBER 엔티티를 감지
-    # 감지된 텍스트 span을 각 카테고리별 set에 넣고, 후에 정규화를 거쳐 반환
+    """
+    Presidio AnalyzerEngine을 사용하여 PII를 감지한다.
+    - PERSON, EMAIL_ADDRESS는 전체 메일 텍스트(full_text, 헤더+바디)에서 검출
+    - PHONE_NUMBER는 메일 바디(body_text)에서만 검출하여 Message-ID 등의 노이즈를 줄인다.
+    """
     names: Set[str] = set()
     emails: Set[str] = set()
     phones: Set[str] = set()
 
-    # Presidio로 한 번에 세 종류의 엔티티를 분석
     try:
-        results = analyzer.analyze(
-            text=text,
+        # 전체 텍스트에서 PERSON / EMAIL_ADDRESS 탐지
+        full_results = analyzer.analyze(
+            text=full_text,
             language="en",
-            entities=["EMAIL_ADDRESS", "PHONE_NUMBER", "PERSON"],
+            entities=["EMAIL_ADDRESS", "PERSON"],
+        )
+
+        # 바디 텍스트에서 PHONE_NUMBER만 별도로 탐지
+        body_results = analyzer.analyze(
+            text=body_text,
+            language="en",
+            entities=["PHONE_NUMBER"],
         )
     except Exception as e:
         logging.error("Presidio analysis failed: %s", e)
         return {"names": names, "emails": emails, "phones": phones}
 
-    for res in results:
-        # Presidio 결과 객체에서 원본 텍스트의 start/end 인덱스로 실제 문자열을 추출
+    # 전체 텍스트 기반 결과 처리 (이름/이메일)
+    for res in full_results:
         start, end = res.start, res.end
-        chunk = text[start:end]
+        chunk = full_text[start:end]
         if not chunk:
             continue
 
@@ -147,7 +179,15 @@ def extract_pii_with_presidio(
             norm = normalize_email(chunk)
             if norm:
                 emails.add(norm)
-        elif res.entity_type == "PHONE_NUMBER":
+
+    # 바디 텍스트 기반 결과 처리 (전화번호)
+    for res in body_results:
+        start, end = res.start, res.end
+        chunk = body_text[start:end]
+        if not chunk:
+            continue
+
+        if res.entity_type == "PHONE_NUMBER":
             norm = normalize_phone(chunk)
             if norm:
                 phones.add(norm)
@@ -155,20 +195,23 @@ def extract_pii_with_presidio(
     return {"names": names, "emails": emails, "phones": phones}
 
 
-def extract_pii_with_regex(text: str) -> Dict[str, Set[str]]:
-    # 정규표현식을 사용해 이메일/전화번호를 추가로 검출
-    # Presidio가 놓친 패턴을 보완하고, 간단한 포맷에도 대응하기 위함
+def extract_pii_with_regex(full_text: str, body_text: str) -> Dict[str, Set[str]]:
+    """
+    정규표현식을 사용해 이메일/전화번호를 추가로 검출한다.
+    - 이메일: 헤더/바디 전체(full_text)에서 검출
+    - 전화번호: 메일 바디(body_text)에서만 검출
+    """
     emails: Set[str] = set()
     phones: Set[str] = set()
 
     # 이메일 패턴에 매칭되는 모든 문자열을 찾아 정규화 후 set에 추가
-    for match in re.findall(EMAIL_REGEX, text, flags=re.IGNORECASE):
+    for match in re.findall(EMAIL_REGEX, full_text, flags=re.IGNORECASE):
         norm = normalize_email(match)
         if norm:
             emails.add(norm)
 
     # 전화번호 패턴에 매칭되는 문자열을 찾아 숫자만 남기는 방식으로 정규화
-    for match in re.finditer(PHONE_REGEX, text, flags=re.VERBOSE):
+    for match in re.finditer(PHONE_REGEX, body_text, flags=re.VERBOSE):
         raw = match.group(0)
         norm = normalize_phone(raw)
         if norm:
@@ -242,8 +285,10 @@ def worker_process_file(args):
         # 읽기 실패 등으로 스킵
         return {"status": "skip", "json": None, "has_pii": False}
 
-    presidio_pii = extract_pii_with_presidio(text, ANALYZER)
-    regex_pii = extract_pii_with_regex(text)
+    body_text = get_mail_body(text)
+
+    presidio_pii = extract_pii_with_presidio(text, body_text, ANALYZER)
+    regex_pii = extract_pii_with_regex(text, body_text)
     pii = merge_pii(presidio_pii, regex_pii)
 
     rel_id = file_path.relative_to(root_dir).as_posix()
@@ -277,8 +322,10 @@ def process_single_file(
     if text is None:
         return None
 
-    presidio_pii = extract_pii_with_presidio(text, analyzer)
-    regex_pii = extract_pii_with_regex(text)
+    body_text = get_mail_body(text)
+
+    presidio_pii = extract_pii_with_presidio(text, body_text, analyzer)
+    regex_pii = extract_pii_with_regex(text, body_text)
     pii = merge_pii(presidio_pii, regex_pii)
 
     # ../maildir/ 기준 상대 경로를 id로 사용 (예: "allen-p/all_documents/1.")
