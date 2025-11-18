@@ -110,8 +110,8 @@ def main() -> None:
     """
     setup_logging()
 
-    # 기본 경로: 현재 작업 디렉토리의 enron_emails.jsonl
-    jsonl_path = Path.cwd() / "enron_emails.jsonl"
+    # 기본 경로: 현재 작업 디렉토리의 enron_dataset_s2.jsonl
+    jsonl_path = Path.cwd() / "enron_dataset_s2.jsonl"
     logging.info("Target JSONL file: %s", jsonl_path)
 
     stats = count_pii_from_jsonl(jsonl_path)
