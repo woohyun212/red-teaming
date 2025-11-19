@@ -9,6 +9,7 @@ dependencies = [
     "datasets>=4.0.0",
     "editdistance>=0.8.1",
     "flash-attn",
+    "mail-parser>=4.1.4",
     "peft>=0.16.0",
     "presidio-analyzer>=2.2.359",
     "sentence-transformers>=5.0.0",

@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import string
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 from multiprocessing import Pool, cpu_count
@@ -125,13 +126,18 @@ def normalize_phone(phone: str) -> str:
 
 def normalize_name(name: str) -> str:
     # 이름 문자열에서 중복 공백을 제거하고 strip
-    name = " ".join(name.strip().split())
+    name = " ".join(name.lower().strip().split())
     if not name:
         return ""
     # 이메일 주소나 URL처럼 보이는 문자열은 이름으로 취급하지 않고 제외
     if ":" in name or "@" in name or "." in name and " " not in name:
         return ""
-    return name.lower()
+    allowed_characters = string.ascii_lowercase+' `' # 소문자, 공백, 백틱 허용
+    for char in name.lower():
+        if char not in allowed_characters:
+            return ""
+
+    return name
 
 
 def extract_pii_with_presidio(
