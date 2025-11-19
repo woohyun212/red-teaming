@@ -105,6 +105,14 @@ def setup_presidio_analyzer() -> AnalyzerEngine:
     }
     provider = NlpEngineProvider(nlp_configuration=configuration)
     nlp_engine = provider.create_engine()
+
+    # spaCy nlp 객체를 직접 꺼내서 max_length 조정 (주의!)
+    try:
+        spacy_nlp = nlp_engine.nlp["en"]
+        spacy_nlp.max_length = 2_000_000  # or whatever
+    except Exception as e:
+        logging.warning("Failed to set spaCy max_length: %s", e)
+
     analyzer = AnalyzerEngine(nlp_engine=nlp_engine, supported_languages=["en"])
     return analyzer
 
@@ -139,6 +147,52 @@ def normalize_name(name: str) -> str:
 
     return name
 
+def extract_names_from_headers(full_text: str) -> Set[str]:
+    """
+    메일 원문에서 X-From, X-To 헤더를 파싱해서 이름 후보를 추출한다.
+    - 이메일 주소(<...>)는 제거
+    - @ 도메인 붙은 토큰은 제거
+    - ',' / ';' 로 1차 split, 공백으로 2차 split
+    - normalize_name을 거친 full name + 토큰(3글자 이상)을 names로 추가
+    """
+    header_lines: List[str] = []
+
+    # X-From / X-To 헤더 라인만 뽑기 (대소문자 무시)
+    for header in ("X-From", "X-To"):
+        pattern = rf"^{header}:\s*(.+)$"
+        matches = re.findall(pattern, full_text, flags=re.MULTILINE | re.IGNORECASE)
+        header_lines.extend(matches)
+
+    candidates: Set[str] = set()
+
+    for raw in header_lines:
+        # 1) 이메일 주소(<...>) 제거
+        tmp = re.sub(r"<[^>]+>", " ", raw)
+        # 2) @가 포함된 토큰 제거 (도메인/아이디 등)
+        tokens = tmp.split()
+        tokens = [t for t in tokens if "@" not in t]
+        tmp = " ".join(tokens)
+        # 3) 따옴표 제거
+        tmp = tmp.replace('"', " ").replace("'", " ")
+
+        # 4) ',' / ';' 기준으로 1차 분리 (여러 명이 있을 수 있으니까)
+        parts = re.split(r"[;,]", tmp)
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+
+            # 먼저 전체를 하나의 이름으로 normalization 시도
+            full_norm = normalize_name(part)
+            if full_norm:
+                candidates.add(full_norm)
+
+                # full name을 공백 기준으로 쪼개서 3글자 이상 토큰도 추가
+                for tok in full_norm.split():
+                    if len(tok) >= 3:
+                        candidates.add(tok)
+
+    return candidates
 
 def extract_pii_with_presidio(
     full_text: str, body_text: str, analyzer: AnalyzerEngine
@@ -197,6 +251,10 @@ def extract_pii_with_presidio(
             norm = normalize_phone(chunk)
             if norm:
                 phones.add(norm)
+
+    # --- 추가: X-From / X-To 헤더에서 이름 후보 추출 ---
+    header_names = extract_names_from_headers(full_text)
+    names.update(header_names)
 
     return {"names": names, "emails": emails, "phones": phones}
 
@@ -427,4 +485,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    print(extract_names_from_headers("""Message-ID: <23754218.1075856162542.JavaMail.evans@thyme>\nDate: Thu, 7 Dec 2000 02:37:00 -0800 (PST)\nFrom: tori.kuykendall@enron.com\nTo: ppope01@coair.com\nSubject: Re: Coair Reply\nMime-Version: 1.0\nContent-Type: text/plain; charset=us-ascii\nContent-Transfer-Encoding: 7bit\nX-From: Tori Kuykendall\nX-To: \"Pope, Pamela\" <PPope01@coair.com> @ ENRON\nX-cc: \nX-bcc: \nX-Folder: \\Tori_Kuykendall_Dec2000\\Notes Folders\\'sent mail\nX-Origin: Kuykendall-T\nX-FileName: tkuyken.nsf\n\nHere is the information that you needed:  My tickets were electronic and the \nconfirmation number was NGP6MP.  Thank You."""))
