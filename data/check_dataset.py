@@ -3,6 +3,9 @@ import argparse
 from typing import List, Dict, Any
 
 
+checked_pii = set({})
+
+
 def find_name_context(text: str, name: str, window: int = 40) -> str:
     """
     text 안에서 name을 찾아 앞뒤 window 글자씩 context를 반환.
@@ -46,6 +49,10 @@ def interactive_filter_names(
 
     for name in names:
         context = find_name_context(text, name, window=window)
+        if name in checked_pii:
+            print(f'\n{name} 은(는) 이미 처리된 PII이므로 자동으로 유지합니다.')
+            new_names.append(name)
+            continue
 
         print("\n----------------------------------------")
         print(f'PII 후보 (name): "{name}"')
@@ -54,6 +61,7 @@ def interactive_filter_names(
         user_in = input("> ").strip()
 
         if user_in == "1":
+            checked_pii.add(name)
             new_names.append(name)
         elif user_in.lower() == "s":
             # 나머지는 그냥 그대로 둔다고 할지, 전부 유지/제거할지 정책 선택 가능
