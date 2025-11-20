@@ -1,5 +1,6 @@
 import os
 import torch
+import wandb
 from datasets import load_dataset
 from transformers import (
     AutoTokenizer,
@@ -89,7 +90,8 @@ training_args = TrainingArguments(
     fp16=True,
     bf16=False,
     gradient_checkpointing=True,
-    report_to="none",
+    report_to=["wandb"],
+    run_name="gptneo-2.7b-enron-fsdp",
 
     # ------- FSDP 관련 -------
     fsdp="full_shard auto_wrap",
