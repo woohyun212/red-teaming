@@ -253,8 +253,8 @@ def extract_pii_with_presidio(
                 phones.add(norm)
 
     # --- 추가: X-From / X-To 헤더에서 이름 후보 추출 ---
-    header_names = extract_names_from_headers(full_text)
-    names.update(header_names)
+    # header_names = extract_names_from_headers(full_text)
+    # names.update(header_names)
 
     return {"names": names, "emails": emails, "phones": phones}
 
@@ -485,5 +485,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    # main()
-    print(extract_names_from_headers("""Message-ID: <23754218.1075856162542.JavaMail.evans@thyme>\nDate: Thu, 7 Dec 2000 02:37:00 -0800 (PST)\nFrom: tori.kuykendall@enron.com\nTo: ppope01@coair.com\nSubject: Re: Coair Reply\nMime-Version: 1.0\nContent-Type: text/plain; charset=us-ascii\nContent-Transfer-Encoding: 7bit\nX-From: Tori Kuykendall\nX-To: \"Pope, Pamela\" <PPope01@coair.com> @ ENRON\nX-cc: \nX-bcc: \nX-Folder: \\Tori_Kuykendall_Dec2000\\Notes Folders\\'sent mail\nX-Origin: Kuykendall-T\nX-FileName: tkuyken.nsf\n\nHere is the information that you needed:  My tickets were electronic and the \nconfirmation number was NGP6MP.  Thank You."""))
+    main()
+    # print(extract_names_from_headers("""Message-ID: <23754218.1075856162542.JavaMail.evans@thyme>\nDate: Thu, 7 Dec 2000 02:37:00 -0800 (PST)\nFrom: tori.kuykendall@enron.com\nTo: ppope01@coair.com\nSubject: Re: Coair Reply\nMime-Version: 1.0\nContent-Type: text/plain; charset=us-ascii\nContent-Transfer-Encoding: 7bit\nX-From: Tori Kuykendall\nX-To: \"Pope, Pamela\" <PPope01@coair.com> @ ENRON\nX-cc: \nX-bcc: \nX-Folder: \\Tori_Kuykendall_Dec2000\\Notes Folders\\'sent mail\nX-Origin: Kuykendall-T\nX-FileName: tkuyken.nsf\n\nHere is the information that you needed:  My tickets were electronic and the \nconfirmation number was NGP6MP.  Thank You."""))
