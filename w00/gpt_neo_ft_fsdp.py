@@ -76,7 +76,8 @@ training_args = TrainingArguments(
     per_device_train_batch_size=2,
     per_device_eval_batch_size=1,
     gradient_accumulation_steps=8,
-    evaluation_strategy="steps",
+    # evaluation_strategy="steps", # deprecated
+    eval_strategy="steps",
     eval_steps=500,
     logging_steps=50,
     save_steps=1000,
@@ -87,9 +88,9 @@ training_args = TrainingArguments(
     warmup_steps=100,
     lr_scheduler_type="cosine",
 
-    fp16=True,
-    bf16=False,
-    gradient_checkpointing=True,
+    fp16=False,
+    bf16=torch.cuda.is_available(),
+    gradient_checkpointing=False,
     report_to=["wandb"],
     run_name="gptneo-2.7b-enron-fsdp",
 
