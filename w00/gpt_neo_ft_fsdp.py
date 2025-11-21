@@ -37,6 +37,7 @@ model = AutoModelForCausalLM.from_pretrained(
     MODEL_NAME,
     torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
 )
+model.config.use_cache = False
 
 max_length = 2048  # context 길이, 최대 2048
 
@@ -90,23 +91,24 @@ training_args = TrainingArguments(
 
     fp16=False,
     bf16=True,
-    gradient_checkpointing=True,
+    gradient_checkpointing=False,
     report_to=["wandb"],
     run_name="gptneo-2.7b-enron-fsdp",
 
     # ------- DDP 관련 -------
-    ddp_find_unused_parameters=False
+    ddp_find_unused_parameters=False,
 
     # ------- FSDP 관련 -------
-    # fsdp="full_shard auto_wrap",
-    # fsdp_config={
-    #     "fsdp_auto_wrap_policy": "TRANSFORMER_BASED_WRAP",
-    #     "fsdp_backward_prefetch": "BACKWARD_PRE",
-    #     "fsdp_state_dict_type": "FULL_STATE_DICT",
+    fsdp="full_shard auto_wrap",
+    fsdp_config={
+        "fsdp_auto_wrap_policy": "TRANSFORMER_BASED_WRAP",
+        "fsdp_backward_prefetch": "BACKWARD_PRE",
+        "fsdp_state_dict_type": "FULL_STATE_DICT",
+        "activation_checkpointing": True,
     #     # 필요하면 CPU offload 켜기
     #     "fsdp_cpu_offload": True,
     #     "fsdp_limit_all_gathers": True,
-    # },
+    },
 )
 
 # --------- 5) Trainer ---------
