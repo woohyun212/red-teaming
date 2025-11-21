@@ -95,7 +95,7 @@ training_args = TrainingArguments(
     run_name="gptneo-2.7b-enron-fsdp",
 
     # ------- DDP 관련 -------
-    dp_find_unused_parameters=False
+    ddp_find_unused_parameters=False
 
     # ------- FSDP 관련 -------
     # fsdp="full_shard auto_wrap",
@@ -103,10 +103,10 @@ training_args = TrainingArguments(
     #     "fsdp_auto_wrap_policy": "TRANSFORMER_BASED_WRAP",
     #     "fsdp_backward_prefetch": "BACKWARD_PRE",
     #     "fsdp_state_dict_type": "FULL_STATE_DICT",
-        # 필요하면 CPU offload 켜기
-        # "fsdp_cpu_offload": True,
-        # "fsdp_limit_all_gathers": True,
-    },
+    #     # 필요하면 CPU offload 켜기
+    #     "fsdp_cpu_offload": True,
+    #     "fsdp_limit_all_gathers": True,
+    # },
 )
 
 # --------- 5) Trainer ---------
