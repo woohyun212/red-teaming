@@ -18,13 +18,13 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 # 각 줄이 {"id": ..., "text": "...", "pii": {...}} 형태라고 가정
 raw_dataset = load_dataset(
     "json",
-    data_files={"train": "enron.jsonl"},
+    data_files={"train": "../data/enron.jsonl"},
 )["train"]
 
 # train / validation split
-dataset_dict = raw_dataset.train_test_split(test_size=0.01, seed=42)
-train_dataset = dataset_dict["train"]
-eval_dataset = dataset_dict["test"]
+# dataset_dict = raw_dataset.train_test_split(test_size=0.01, seed=42)
+train_dataset = raw_dataset # dataset_dict["train"]
+# eval_dataset = dataset_dict["test"]
 
 print(train_dataset[0])  # 디버깅용: {'id': ..., 'text': '...', 'pii': {...}}
 
@@ -57,12 +57,12 @@ train_dataset = train_dataset.map(
     remove_columns=train_dataset.column_names,  # id, text, pii 등 전부 제거하고 tokenized만 남김
 )
 
-eval_dataset = eval_dataset.map(
-    tokenize_function,
-    batched=True,
-    num_proc=4,
-    remove_columns=eval_dataset.column_names,
-)
+# eval_dataset = eval_dataset.map(
+#     tokenize_function,
+#     batched=True,
+#     num_proc=4,
+#     remove_columns=eval_dataset.column_names,
+# )
 
 # --------- 3) Data Collator (Causal LM) ---------
 data_collator = DataCollatorForLanguageModeling(
@@ -73,9 +73,9 @@ data_collator = DataCollatorForLanguageModeling(
 # --------- 4) DDP, FSDP 설정이 들어간 TrainingArguments ---------
 training_args = TrainingArguments(
     output_dir="./gptneo-2.7b-enron-fsdp",
-    per_device_train_batch_size=2,
+    per_device_train_batch_size=8,
     per_device_eval_batch_size=1,
-    gradient_accumulation_steps=8,
+    gradient_accumulation_steps=2,
     # evaluation_strategy="steps", # deprecated
     eval_strategy="steps",
     eval_steps=500,
@@ -114,7 +114,7 @@ trainer = Trainer(
     model=model,
     args=training_args,
     train_dataset=train_dataset,
-    eval_dataset=eval_dataset,
+    # eval_dataset=eval_dataset,
     tokenizer=tokenizer,
     data_collator=data_collator,
 )
